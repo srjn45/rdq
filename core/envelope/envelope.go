@@ -45,6 +45,13 @@ type Envelope struct {
 
 	// Attempts is the ordered failure history; it travels into the DLQ.
 	Attempts []Attempt `json:"attempts,omitempty"`
+
+	// Residual holds unknown top-level JSON fields captured on decode and
+	// re-emitted on encode, so a task written by a newer envelope_version
+	// round-trips losslessly through an older reader (design 01 §5, rule 1).
+	// Codec-managed via the canonical Marshal/Unmarshal; json:"-" keeps it out
+	// of the struct's own tag-based marshaling.
+	Residual map[string]json.RawMessage `json:"-"`
 }
 
 // Attempt is one execution record in an Envelope's history (design 01 §2).
@@ -55,6 +62,10 @@ type Attempt struct {
 	FinishedAt *time.Time `json:"finished_at"`
 	Outcome    Outcome    `json:"outcome"`
 	Error      *Error     `json:"error,omitempty"`
+
+	// Residual holds unknown per-attempt JSON fields, preserved on the
+	// round-trip exactly like Envelope.Residual (design 01 §5, rule 1).
+	Residual map[string]json.RawMessage `json:"-"`
 }
 
 // Error is the failure detail attached to a non-successful attempt (design 01

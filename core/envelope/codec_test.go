@@ -143,6 +143,45 @@ func goldenFixtures() map[string]Envelope {
 				},
 			},
 		},
+
+		// T1.3: a task written by a newer envelope_version carries fields this
+		// reader does not know. They must survive the round-trip verbatim
+		// (design 01 §5, rule 1) — both extra top-level fields and extra
+		// per-attempt fields. Unknown keys are re-emitted sorted, after all
+		// known fields of their object.
+		"unknown_fields.json": {
+			EnvelopeVersion:    1,
+			ID:                 "01J2ZN0000000000000000000B",
+			Queue:              "orders.reserve",
+			HandlerRef:         "reserve-stock",
+			Payload:            []byte("{}"),
+			PayloadContentType: "application/json",
+			Status:             StatusPending,
+			AttemptCount:       1,
+			RedriveCount:       0,
+			NextAttemptAt:      tp(ms(2026, 7, 20, 15, 0, 0, 0)),
+			CreatedAt:          ms(2026, 7, 20, 14, 30, 0, 0),
+			// Extra top-level fields (a scalar and a nested object).
+			Residual: map[string]json.RawMessage{
+				"future_priority": json.RawMessage(`7`),
+				"x_experimental":  json.RawMessage(`{"canary":true}`),
+			},
+			Attempts: []Attempt{{
+				AttemptNo:  1,
+				StartedAt:  ms(2026, 7, 20, 14, 30, 1, 0),
+				FinishedAt: tp(ms(2026, 7, 20, 14, 30, 1, 250)),
+				Outcome:    OutcomeRetryableFailure,
+				Error: &Error{
+					Type:    "*errors.errorString",
+					Message: "insufficient stock",
+				},
+				// Extra per-attempt fields (a scalar and a string).
+				Residual: map[string]json.RawMessage{
+					"future_latency_ms": json.RawMessage(`142`),
+					"trace_flags":       json.RawMessage(`"01"`),
+				},
+			}},
+		},
 	}
 }
 
@@ -191,6 +230,88 @@ func TestGoldenFixtures(t *testing.T) {
 				t.Errorf("round-trip not byte-stable\n got: %s\nwant: %s", round, want)
 			}
 		})
+	}
+}
+
+// TestResidualRoundTrip asserts that unknown fields — top-level AND per-attempt
+// — captured on decode survive re-encode byte-for-byte (design 01 §5, rule 1).
+func TestResidualRoundTrip(t *testing.T) {
+	want, err := os.ReadFile(filepath.Join("testdata", "unknown_fields.json"))
+	if err != nil {
+		t.Fatalf("ReadFile (run TestGoldenFixtures with -update to create): %v", err)
+	}
+
+	env, err := Unmarshal(want)
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	// Top-level unknown fields are captured, values verbatim.
+	assertResidual(t, "top-level", env.Residual, map[string]string{
+		"future_priority": "7",
+		"x_experimental":  `{"canary":true}`,
+	})
+	// Known keys never leak into the residual.
+	if _, ok := env.Residual["attempts"]; ok {
+		t.Errorf(`known key "attempts" captured as residual`)
+	}
+
+	// Per-attempt unknown fields are captured on the right attempt.
+	if len(env.Attempts) != 1 {
+		t.Fatalf("attempts = %d, want 1", len(env.Attempts))
+	}
+	assertResidual(t, "attempt", env.Attempts[0].Residual, map[string]string{
+		"future_latency_ms": "142",
+		"trace_flags":       `"01"`,
+	})
+
+	// read(write(x)) == x, byte-stable, with the residual preserved.
+	round, err := Marshal(env)
+	if err != nil {
+		t.Fatalf("re-Marshal: %v", err)
+	}
+	if string(round) != string(want) {
+		t.Errorf("residual round-trip not byte-stable\n got: %s\nwant: %s", round, want)
+	}
+}
+
+// TestNoResidualIsNil guards that the residual capture never fires for envelopes
+// that carry only known fields — the existing T1.2 fixtures decode to nil maps.
+func TestNoResidualIsNil(t *testing.T) {
+	for _, name := range []string{"envelope_full.json", "error_type_go.json", "lease_expired.json"} {
+		data, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			t.Fatalf("ReadFile %s: %v", name, err)
+		}
+		env, err := Unmarshal(data)
+		if err != nil {
+			t.Fatalf("Unmarshal %s: %v", name, err)
+		}
+		if env.Residual != nil {
+			t.Errorf("%s: envelope residual = %v, want nil", name, env.Residual)
+		}
+		for i, a := range env.Attempts {
+			if a.Residual != nil {
+				t.Errorf("%s: attempt %d residual = %v, want nil", name, i, a.Residual)
+			}
+		}
+	}
+}
+
+func assertResidual(t *testing.T, where string, got map[string]json.RawMessage, want map[string]string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Errorf("%s residual has %d keys, want %d (%v)", where, len(got), len(want), got)
+	}
+	for k, v := range want {
+		raw, ok := got[k]
+		if !ok {
+			t.Errorf("%s residual missing key %q", where, k)
+			continue
+		}
+		if string(raw) != v {
+			t.Errorf("%s residual[%q] = %s, want %s", where, k, raw, v)
+		}
 	}
 }
 
