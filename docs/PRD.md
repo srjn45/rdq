@@ -149,16 +149,24 @@ Not every language or API signals failure by throwing — Go returns `err`, some
 
 Monorepo, renamed **`rdq`** (GitHub redirect from `kafka-retry-dlq` preserves history):
 
+Go modules are `github.com/srjn45/rdq/*` and the Maven group is `io.github.srjn45` — GitHub-based
+identity everywhere, no domain purchase (OQ-4 resolved, see §14 and design 05 §0/§0.1/G1).
+
 ```
 rdq/
-  core/          # engine semantics, envelope spec, SPI definition + compliance kit
-  sdk-java/      # Maven: dev.rdq:rdq-java (worker, sync retry, Postgres driver binding)
-  sdk-go/        # Go module: rdq.dev/sdk-go
-  server/        # rdq-server (Go): API, callback dispatch, Dockerfile + Helm chart
-  storage/postgres/
-  cli/           # rdq CLI (Go, single binary)
+  core/          # Go module github.com/srjn45/rdq/core — engine semantics, envelope, SPI + compliance kit
+  sdk-java/      # Maven: io.github.srjn45:rdq-java-client (submit) + io.github.srjn45:rdq-java-worker (engine)
+  sdk-go/        # Go module github.com/srjn45/rdq/sdk-go — worker + a submit-only sub-package
+  server/        # github.com/srjn45/rdq/server — rdq-server (Go): API, callback dispatch, Dockerfile + Helm chart
+  storage/postgres/  # github.com/srjn45/rdq/storage/postgres
+  cli/           # github.com/srjn45/rdq/cli — rdq CLI (Go, single binary)
   docs/
 ```
+
+**SDK client/worker artifact split (OQ-1 resolved, design 05 §0).** The engine ships as a
+submit-only artifact plus a worker artifact so apps can "submit here, execute there": Java
+`io.github.srjn45:rdq-java-client` (submit) + `io.github.srjn45:rdq-java-worker` (engine,
+depends on client); Go a `submit` sub-package importable without the worker.
 
 The existing prototype (`RetrySync`, `RetryConfig` policy concepts) informs the Java SDK's sync-retry layer; the serialized-lambda `FunctionRegistry` and `InMemoryRetryQueue` are superseded by §8.5 and the storage SPI.
 
@@ -190,4 +198,4 @@ The existing prototype (`RetrySync`, `RetryConfig` policy concepts) informs the 
 - **OQ-1:** Should the Java SDK's embedded worker be opt-in (separate artifact) so apps can run submit-only and delegate execution to `rdq-server`? (Leaning yes — "submit here, execute there" is a likely hybrid deployment.)
 - **OQ-2:** Envelope payload limit and large-payload story (inline bytes vs. claim-check pointer to object storage)?
 - **OQ-3:** Success-record retention default (`task_ttl`) — keep succeeded tasks for observability, and for how long?
-- **OQ-4:** Package/domain claims to make now: `rdq` GitHub org, `dev.rdq` Maven group, `rdq.dev` domain.
+- **OQ-4 — resolved v1 (see design 05 §0/§0.1):** GitHub-based identity everywhere, no purchases. Go modules `github.com/srjn45/rdq/*` (G1); Maven group `io.github.srjn45` (free, Sonatype GitHub-verified — no domain proof needed, G15). A domain (`retrydlq.dev` is the evaluated affordable candidate; `rdq.dev` is premium-priced) and/or an `rdq` GitHub org are **deferred** until a docs site is wanted — both are additive later (a new Maven group can be introduced alongside; an org rename keeps redirects) and neither blocks v1.
