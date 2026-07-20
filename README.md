@@ -1,53 +1,52 @@
-# kafka-retry-dlq ![Build Status](https://github.com/srjn45/kafka-retry-dlq/actions/workflows/ci.yml/badge.svg)
+# rdq ![Build Status](https://github.com/srjn45/rdq/actions/workflows/ci.yml/badge.svg)
 
-java library that provide retry &amp; dlq mechanism for any java func
+**Retry & Dead-letter Queues — for any broker, any storage, any language.**
 
-## Usage
+> 🚧 **Redesign in progress.** rdq (formerly `kafka-retry-dlq`) is being rebuilt from the
+> ground up. The [PRD](docs/PRD.md) and [design docs](docs/design/) describe the target;
+> implementation is underway and nothing here is API-stable yet.
 
-### Synchronous Retry
+## What is rdq?
 
-this can be used to retry any function in a synchronous code flow
+A function call failed — a Kafka handler, an SQS consumer, any `func(args)`. Hand rdq the
+handler's name and its arguments, and rdq guarantees one of two outcomes:
 
-- retry on failure for configured number of attempts
-- also support linear & exponential backoff
-- can config when to retry & when to skip
-- throws exception once all the attempts are exhausted
+1. the call **eventually succeeds** (retried on your configured backoff schedule), or
+2. it lands in a **dead-letter queue with its full failure history** — every attempt's
+   error, stack trace, and timestamp — where it can be inspected, fixed, and redriven.
 
-```
-RetrySync<String> retrySync = new RetrySync<>(retryConfig);
+What makes rdq different:
 
-var result = retrySync.execute(() -> funcWithReturnValue(args));
+- **Bring your own storage** — retry queues and DLQs live in the datastore you already run
+  (PostgreSQL first; Redis, MongoDB, and more via a documented storage SPI). rdq adds no
+  new stateful infrastructure.
+- **Broker-agnostic** — Kafka, SQS, Redpanda, AutoMQ, RabbitMQ, or no broker at all. rdq
+  accepts failures from any source; it never sits on the hot path of successful messages.
+- **Two form factors, one engine** — embed the SDK in your app (zero extra infra), or run
+  `rdq-server` as a central retry hub with REST/gRPC intake and HTTP/gRPC callbacks.
+- **At-least-once, horizontally scalable** — stateless workers, atomic claims, and leases;
+  fault tolerance is inherited from your storage backend's own HA.
 
-retrySync.execute(() -> {funcThatReturnsNothing(args); return null;});
+## Repository layout
 
-T funcWithReturnValue(...) {}
+| Path | What it is |
+|---|---|
+| [`core/`](core/) | The engine (Go): envelope model, retry policies, outcome classification, storage SPI + compliance kit |
+| [`storage/postgres/`](storage/postgres/) | Reference storage plugin (`FOR UPDATE SKIP LOCKED` claims) |
+| [`server/`](server/) | `rdq-server`: REST/gRPC intake, DLQ & admin APIs, callback delivery |
+| [`cli/`](cli/) | `rdq` CLI: stats, DLQ browse, redrive/purge |
+| [`sdk-go/`](sdk-go/) | Embedded Go SDK |
+| [`sdk-java/`](sdk-java/) | Java SDK (embedded engine per spec; carries the original sync retrier) |
+| [`docs/`](docs/) | [PRD](docs/PRD.md) and design docs |
 
-void funcThatReturnsNothing(...) {}
-```
+## Design
 
-### RetryConfig
+- [PRD](docs/PRD.md)
+- [01 — Wire envelope](docs/design/01-wire-envelope.md)
+- [02 — Storage SPI](docs/design/02-storage-spi.md)
+- [03 — Queue configuration](docs/design/03-queue-config.md)
+- [04 — rdq-server API](docs/design/04-server-api.md)
 
-#### attempts
+## License
 
-- **Description:** number of attempts before throwing error (including the original call)
-- **Default:** 1 (executes once without any retry)
-
-#### backoff
-
-- **Description:** delay (in milliseconds) between subsequent retry calls
-- **Default:** 0 (instant retry)
-
-#### backoffMultiplier
-
-- **Description:** exponential backoff
-- **Default:** 1 (linear backoff)
-
-#### retryableException
-
-- **Description:** exceptions that are retry should be attempted
-- **Default:** empty (retry on all exceptions)
-
-#### skippableException
-
-- **Description:** exceptions on which retry should **NOT** be attempted
-- **Default:** empty (skip nothing)
+[MIT](LICENSE)

@@ -1,0 +1,9 @@
+go 1.26
+
+use (
+	./cli
+	./core
+	./sdk-go
+	./server
+	./storage/postgres
+)

@@ -7,8 +7,11 @@ on:
     branches: [ main ]
 
 jobs:
-  spotless:
+  java:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk-java
 
     steps:
       - name: Checkout code
@@ -38,63 +41,28 @@ jobs:
         run: ./gradlew spotlessCheck
         continue-on-error: true
 
-  spotbugs:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-          cache: gradle
-
-      - name: Cache Gradle dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-
-      - name: Grant execute permission for Gradle wrapper
-        run: chmod +x gradlew
-
       - name: Run SpotBugs
         run: ./gradlew spotbugsMain spotbugsTest
         continue-on-error: true
 
-  test:
+      - name: Run tests
+        run: ./gradlew clean test jacocoTestReport jacocoTestCoverageVerification
+
+  go:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          distribution: 'temurin'
-          java-version: '21'
-          cache: gradle
+          go-version: '1.26'
 
-      - name: Cache Gradle dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-
-      - name: Grant execute permission for Gradle wrapper
-        run: chmod +x gradlew
-
-      - name: Run tests
-        run: ./gradlew clean test jacocoTestReport jacocoTestCoverageVerification
+      - name: Vet, build, test all modules
+        run: |
+          for mod in core storage/postgres server cli sdk-go; do
+            echo "--- $mod"
+            (cd "$mod" && go vet ./... && go build ./... && go test ./...)
+          done
