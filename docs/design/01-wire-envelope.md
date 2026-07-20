@@ -65,7 +65,8 @@ If two components disagree about a task, the envelope is the arbiter.
 | `queue` | Logical queue name. `[a-z0-9._-]`, max 240 chars. |
 | `handler_ref` | Stable handler name (PRD §8.5). Same charset rule. |
 | `handler_version` | Optional; mismatch behavior is queue config. |
-| `payload` / `payload_content_type` | Opaque bytes + MIME type. Default max envelope size **1 MiB** (configurable per queue); larger payloads are the claim-check open question (PRD OQ-2). |
+| `payload` / `payload_content_type` | Opaque bytes + MIME type. Default max envelope size **1 MiB** (configurable per queue); larger payloads are rejected with `PAYLOAD_TOO_LARGE`. The object-storage claim-check is deferred post-v1 (OQ-2 resolved v1 — see design 05 §0). |
+| `payload_ref` | **Reserved, unused in v1.** Optional future pointer to an externally-stored payload (object-storage claim-check). Reserved now so that adding it later stays additive (OQ-2 resolved v1 — deferred to post-v1, see design 05 §0). |
 | `headers` | Flat string→string map. The **`rdq.` prefix is reserved** for system metadata; user headers must not use it. Well-known: `rdq.source` (origin locator, e.g. `kafka://topic/partition/offset`, `sqs://queue-url/msg-id`), `rdq.submitted_by`. Trace context (`traceparent`) rides here. |
 | `status` | `PENDING` \| `IN_FLIGHT` \| `SUCCEEDED` \| `DEAD`. |
 | `attempt_count` | Attempts consumed so far. **Reset to 0 on redrive**; `redrive_count` increments instead, and prior attempts stay in `attempts`. |
@@ -80,11 +81,19 @@ If two components disagree about a task, the envelope is the arbiter.
 `LEASE_EXPIRED` is recorded when a claim's lease lapses without a reported outcome (worker
 crash, handler overrun). It **counts against `max_attempts`** — otherwise a handler that
 reliably crashes its worker would retry forever and never reach the DLQ (poison-pill
-protection).
+protection). Its `error` object has `type = "rdq.LeaseExpired"`, a `message` stating the lease
+deadline, and no `stack` (G7, resolved v1 — see design 05 §0.1); this shape is frozen in the
+M1 compliance fixtures.
 
 `error` object: `type` (language-native class/type string), `message` (truncated at 4 KiB),
 `detail` (optional structured JSON from the `OutcomeMapper`), `stack` (optional, truncated at
 64 KiB). Truncation is marked with a trailing `…[truncated]`.
+
+**`error.type` across languages.** Java (and other class-based runtimes) uses the native
+exception class name. Go, which has no class names, follows this convention (G6, resolved v1 —
+see design 05 §0.1): the wrapper/classifier-supplied name wins when present, otherwise
+`fmt.Sprintf("%T", err)` of the innermost unwrapped error. Config classification globs (design
+03 §4) and the M1 fixtures match on this string, so the convention is frozen with the fixtures.
 
 ## 3. What is deliberately NOT in the envelope
 
