@@ -16,7 +16,10 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -231,6 +234,10 @@ type wireEnvelope struct {
 	CreatedAt      Time  `json:"created_at"`
 
 	Attempts []wireAttempt `json:"attempts,omitempty"`
+
+	// Residual carries unknown top-level fields; json:"-" so the residual
+	// merge (MarshalJSON) is the only path that emits them.
+	Residual map[string]json.RawMessage `json:"-"`
 }
 
 // wireAttempt mirrors Attempt with a canonical Time.
@@ -240,6 +247,9 @@ type wireAttempt struct {
 	FinishedAt *Time   `json:"finished_at"`
 	Outcome    Outcome `json:"outcome"`
 	Error      *Error  `json:"error,omitempty"`
+
+	// Residual carries unknown per-attempt fields (see wireEnvelope.Residual).
+	Residual map[string]json.RawMessage `json:"-"`
 }
 
 func wireTimePtr(t *time.Time) *Time {
@@ -275,6 +285,7 @@ func toWire(e *Envelope) *wireEnvelope {
 		NextAttemptAt:      wireTimePtr(e.NextAttemptAt),
 		LeaseExpiresAt:     wireTimePtr(e.LeaseExpiresAt),
 		CreatedAt:          Time(e.CreatedAt),
+		Residual:           e.Residual,
 	}
 	if e.Attempts != nil {
 		w.Attempts = make([]wireAttempt, len(e.Attempts))
@@ -285,6 +296,7 @@ func toWire(e *Envelope) *wireEnvelope {
 				FinishedAt: wireTimePtr(a.FinishedAt),
 				Outcome:    a.Outcome,
 				Error:      a.Error,
+				Residual:   a.Residual,
 			}
 		}
 	}
@@ -308,6 +320,7 @@ func (w *wireEnvelope) toEnvelope() Envelope {
 		NextAttemptAt:      timePtr(w.NextAttemptAt),
 		LeaseExpiresAt:     timePtr(w.LeaseExpiresAt),
 		CreatedAt:          time.Time(w.CreatedAt),
+		Residual:           w.Residual,
 	}
 	if w.Attempts != nil {
 		e.Attempts = make([]Attempt, len(w.Attempts))
@@ -318,10 +331,169 @@ func (w *wireEnvelope) toEnvelope() Envelope {
 				FinishedAt: timePtr(a.FinishedAt),
 				Outcome:    a.Outcome,
 				Error:      a.Error,
+				Residual:   a.Residual,
 			}
 		}
 	}
 	return e
+}
+
+// --- unknown-field (residual) preservation (design 01 §5, rule 1) ---
+//
+// Fields present on the wire but absent from the wire structs are captured into
+// a Residual map on decode and re-emitted on encode, so a task written by a
+// newer envelope_version round-trips losslessly through an older reader. Both
+// the top-level object and each attempt object carry their own residual.
+// Residual keys are emitted after all known fields, sorted, so the canonical
+// bytes stay deterministic across languages (like the sorted keys of a map).
+
+// envelopeKnownKeys and attemptKnownKeys are the wire json field names, derived
+// once from the struct tags so adding a wire field never requires updating a
+// hand-maintained list.
+var (
+	envelopeKnownKeys = jsonFieldNames(reflect.TypeOf(wireEnvelope{}))
+	attemptKnownKeys  = jsonFieldNames(reflect.TypeOf(wireAttempt{}))
+)
+
+// jsonFieldNames returns the set of wire json field names of struct type t,
+// skipping fields tagged json:"-" (the Residual field itself).
+func jsonFieldNames(t reflect.Type) map[string]struct{} {
+	names := make(map[string]struct{}, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		tag := t.Field(i).Tag.Get("json")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		if comma := strings.IndexByte(tag, ','); comma >= 0 {
+			tag = tag[:comma]
+		}
+		if tag != "" {
+			names[tag] = struct{}{}
+		}
+	}
+	return names
+}
+
+// marshalNoEscape encodes v as compact JSON with HTML escaping disabled and no
+// trailing newline — the same canonical settings Marshal uses.
+func marshalNoEscape(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
+
+// captureResidual returns the object's fields whose keys are not in known, or
+// nil when none remain (so envelopes without unknown fields keep a nil map).
+func captureResidual(data []byte, known map[string]struct{}) (map[string]json.RawMessage, error) {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return nil, err
+	}
+	for k := range all {
+		if _, ok := known[k]; ok {
+			delete(all, k)
+		}
+	}
+	if len(all) == 0 {
+		return nil, nil
+	}
+	return all, nil
+}
+
+// appendResidual writes known's fields followed by residual's, the latter sorted
+// by key so the canonical output is deterministic. known must be a JSON object.
+func appendResidual(known []byte, residual map[string]json.RawMessage) ([]byte, error) {
+	if len(residual) == 0 {
+		return known, nil
+	}
+	keys := make([]string, 0, len(residual))
+	for k := range residual {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	out := make([]byte, 0, len(known)+len(keys)*16)
+	out = append(out, known[:len(known)-1]...) // drop the closing '}'
+	first := len(known) == 2                   // known == "{}" → first pair takes no comma
+	for _, k := range keys {
+		if !first {
+			out = append(out, ',')
+		}
+		first = false
+		key, err := marshalNoEscape(k)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, key...)
+		out = append(out, ':')
+		// Compact (not re-marshal) the value so its bytes — and thus any
+		// escaping the newer writer chose — survive verbatim.
+		var val bytes.Buffer
+		if err := json.Compact(&val, residual[k]); err != nil {
+			return nil, fmt.Errorf("envelope: invalid residual value for %q: %w", k, err)
+		}
+		out = append(out, val.Bytes()...)
+	}
+	out = append(out, '}')
+	return out, nil
+}
+
+// MarshalJSON encodes the known wire fields, then appends any residual unknown
+// top-level fields.
+func (w wireEnvelope) MarshalJSON() ([]byte, error) {
+	type alias wireEnvelope // strips the methods → plain reflection marshal
+	known, err := marshalNoEscape(alias(w))
+	if err != nil {
+		return nil, err
+	}
+	return appendResidual(known, w.Residual)
+}
+
+// UnmarshalJSON decodes the known wire fields and captures every other
+// top-level field into Residual.
+func (w *wireEnvelope) UnmarshalJSON(data []byte) error {
+	type alias wireEnvelope
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*w = wireEnvelope(a)
+	residual, err := captureResidual(data, envelopeKnownKeys)
+	if err != nil {
+		return err
+	}
+	w.Residual = residual
+	return nil
+}
+
+// MarshalJSON mirrors wireEnvelope.MarshalJSON for a single attempt object.
+func (w wireAttempt) MarshalJSON() ([]byte, error) {
+	type alias wireAttempt
+	known, err := marshalNoEscape(alias(w))
+	if err != nil {
+		return nil, err
+	}
+	return appendResidual(known, w.Residual)
+}
+
+// UnmarshalJSON mirrors wireEnvelope.UnmarshalJSON for a single attempt object.
+func (w *wireAttempt) UnmarshalJSON(data []byte) error {
+	type alias wireAttempt
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*w = wireAttempt(a)
+	residual, err := captureResidual(data, attemptKnownKeys)
+	if err != nil {
+		return err
+	}
+	w.Residual = residual
+	return nil
 }
 
 // Marshal encodes e in the canonical wire form (design 01 §1): compact JSON,
