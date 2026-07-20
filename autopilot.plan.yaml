@@ -1,0 +1,80 @@
+version: 1
+
+goal: >
+  Implement rdq v1 by executing the build backlog in docs/design/06-build-backlog.md,
+  in dependency order (each task's `deps:` line), one backlog task per worker
+  branch, until every M0-M8 task's acceptance criteria are green. Designs 01-04
+  are the contracts; design 05 (incl. §0/§0.1 G1-G20) records every resolved
+  decision - do not relitigate any of them.
+
+constraints:
+  - "Source of truth is docs/design/06-build-backlog.md. One backlog task (T*.*) = one worker branch. Respect every task's deps: line; land within a milestone in dependency order."
+  - "APPROVAL-GATED, never autonomous: T0.2 (Sonatype namespace - human action), T0.4 (first push to origin - human approval), T1.9 (contract freeze), T8.4 publish steps (Maven/Docker/module tags). Request operator approval and WAIT; never work around a gate."
+  - "After T1.9 lands, core/envelope + core/spi + the JSON fixtures are FROZEN. Any change to them thereafter requires explicit operator approval."
+  - "Global definition of done (design 06 header) applies to every task: module builds/vets, new code has tests, wd check green before landing. If an acceptance criterion cannot be made green, STOP and report - never weaken, skip, or delete a failing test."
+  - "Never push to origin, publish artifacts, or register external names without explicit operator approval."
+  - "Milestone order: M0 -> M1 -> (M2 parallel M3) -> M4 -> M5 -> M6 -> M8; M7 may run in parallel with M4-M6 once M1 lands. M1 may begin once T0.1 and T0.3 are done; request T0.4 (push) approval early and in parallel."
+  - "Match existing code style; Apache-2.0 source headers on real source files only (not placeholders)."
+
+tasks:
+  - id: m0-contracts
+    prompt: >
+      Execute backlog tasks T0.1 (fold design-05 §0 + §0.1 G1-G20 resolutions into
+      docs/PRD.md and docs/design/01..04) and T0.3 (confirm ~/dev/rdq canonical;
+      report the ~/dev/kafka-retry-dlq duplicate for the operator to archive).
+      T0.2 and T0.4 are human: raise approval requests and continue.
+  - id: m1-core-slice
+    prompt: >
+      Execute M1 (T1.1-T1.9) in docs/design/06-build-backlog.md: core/envelope
+      types + canonical JSON codec + unknown-field preservation + validation,
+      core/spi Storage interface (incl. G4 Get, G8 ErrIDConflict), core/memstore,
+      and the compliance kit (invariants 1-8 + benchmark skeleton). Golden fixtures
+      per T1.2 incl. G6/G7. T1.9 lands only with operator approval (contract freeze).
+  - id: m2-postgres
+    prompt: >
+      Execute M2 (T2.1-T2.6): the PostgreSQL reference plugin - migrations with
+      rdq_schema_version (G5), envelope-row mapping, FOR UPDATE SKIP LOCKED claim +
+      fencing, DLQ/stats/purge/redrive, Notify + FilterPushdown, then run the M1
+      compliance kit and the >=1k claims/sec benchmark via testcontainers.
+  - id: m3-engine
+    prompt: >
+      Execute M3 (T3.1-T3.6): queue-config loader with strict validation and
+      deep-merge, backoff, classification ladder, registry, per-queue rate limiter,
+      and the worker runtime (claim loop, leases, heartbeat, graceful drain G10,
+      PurgeSucceeded sweeper G19), unit-tested on memstore. May run in parallel
+      with m2-postgres.
+  - id: m4-sdk-go
+    prompt: >
+      Execute M4 (T4.1-T4.4): sdk-go submit-only sub-package, worker binding +
+      registration API + outcome wrappers/mappers, sync-retry wrapper + config
+      builder, and the runnable example against testcontainers Postgres.
+  - id: m5-server
+    prompt: >
+      Execute M5 (T5.1-T5.7): rdq-server REST data plane, DLQ/ops plane, ConfigStore
+      (Postgres + boot YAML, G16) + admin plane, HTTP callback dispatch with HMAC +
+      response mapping, authN/Z + callback allowlist, healthz/readyz (G11), and the
+      cross-process integration test. gRPC is post-v1 - do not build it.
+  - id: m6-cli-obs
+    prompt: >
+      Execute M6 (T6.1-T6.4): Prometheus metrics, structured logs + trace
+      propagation, pluggable AuditSink (log + Postgres table, G3), and the rdq CLI
+      with BOTH transports (server API and --dsn direct storage, G2) plus rdq
+      migrate (G17).
+  - id: m7-sdk-java
+    prompt: >
+      Execute M7 (T7.1-T7.6): delete the superseded serialized-lambda prototype,
+      split client/worker Gradle artifacts (io.github.srjn45 group), reimplement
+      envelope/SPI/engine FROM THE SPEC (designs 01-03) - never by porting Go code -
+      validated against the frozen M1 JSON fixtures and the shared T2.1 Postgres
+      schema (G5). May run in parallel with m4/m5/m6 once M1 lands.
+  - id: m8-hardening
+    prompt: >
+      Execute M8 (T8.1-T8.5): chaos/double-claim proof, the cross-language redrive
+      loop (Go submit -> Java worker, and the server callback path), sizing
+      benchmarks, packaging (publishes are approval-gated), and quickstart
+      validation.
+
+done_when:
+  - "Every design-06 backlog task T0.*-T8.* has its acceptance criteria green, or is explicitly deferred by the operator"
+  - "wd check passes on autopilot/integration across all modules (go + java)"
+  - "The compliance kit passes against memstore and Postgres; the T8.2 cross-language loop is green"

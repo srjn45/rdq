@@ -73,7 +73,7 @@ Deliverable: `~/dev/rdq` confirmed canonical; `~/dev/kafka-retry-dlq` archived/r
 silent divergence.
 Acceptance: only one active working copy; both were identical at `9f5826e` before removal.
 
-### T0.4 — First push + CI on remote (HUMAN-APPROVED)        deps: T0.1, T0.2, T0.3
+### T0.4 — First push + CI on remote (HUMAN-APPROVED)        deps: T0.1, T0.3
 Deliverable: `main` pushed to `git@github.com:srjn45/rdq.git`; CI green on the remote; badge live.
 Steps: push; verify the `go` and `java` CI jobs pass on GitHub; once modules carry real code
 (post-M1), flip the Java quality gates off `continue-on-error`.
