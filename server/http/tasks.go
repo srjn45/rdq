@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/srjn45/rdq/core/envelope"
+	rdqlog "github.com/srjn45/rdq/core/log"
 	"github.com/srjn45/rdq/core/spi"
 	sdksubmit "github.com/srjn45/rdq/sdk-go/submit"
 )
@@ -67,7 +68,7 @@ func (s *Server) handleSubmitTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	env, prob := s.buildEnvelope(r.URL.Path, queue, &req)
+	env, prob := s.buildEnvelope(r.URL.Path, queue, &req, r.Header.Get(rdqlog.HeaderTraceparent))
 	if prob != nil {
 		WriteProblem(w, prob)
 		return
@@ -105,9 +106,10 @@ func (s *Server) handleBatchSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	reqTraceparent := r.Header.Get(rdqlog.HeaderTraceparent)
 	results := make([]batchItemResult, len(items))
 	for i := range items {
-		env, prob := s.buildEnvelope(r.URL.Path, queue, &items[i])
+		env, prob := s.buildEnvelope(r.URL.Path, queue, &items[i], reqTraceparent)
 		if prob != nil {
 			results[i] = batchItemResult{Index: i, Status: prob.Status, Error: prob}
 			continue
@@ -146,8 +148,11 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 
 // buildEnvelope validates the submit request and builds an Envelope via the
 // sdk-go/submit path so this handler shares the same validation and ID
-// generation as the Go SDK client. Returns (nil, problem) on failure.
-func (s *Server) buildEnvelope(instance, queue string, req *submitTaskRequest) (*envelope.Envelope, *Problem) {
+// generation as the Go SDK client. reqTraceparent is the inbound HTTP
+// `traceparent` header; it is stamped into the task headers when the client did
+// not already supply one, so trace context flows submit → retry → handler (T6.2).
+// Returns (nil, problem) on failure.
+func (s *Server) buildEnvelope(instance, queue string, req *submitTaskRequest, reqTraceparent string) (*envelope.Envelope, *Problem) {
 	if req.PayloadContentType == "" {
 		return nil, NewProblem(CodeInvalidTask, instance, WithDetail("payload_content_type is required"))
 	}
@@ -155,13 +160,15 @@ func (s *Server) buildEnvelope(instance, queue string, req *submitTaskRequest) (
 		return nil, NewProblem(CodePayloadTooLarge, instance)
 	}
 
+	headers := mergeTraceparent(req.Headers, reqTraceparent)
+
 	var opts []sdksubmit.Option
 	if req.ID != "" {
 		opts = append(opts, sdksubmit.WithID(req.ID))
 	}
 	opts = append(opts, sdksubmit.WithContentType(req.PayloadContentType))
-	if len(req.Headers) > 0 {
-		opts = append(opts, sdksubmit.WithHeaders(req.Headers))
+	if len(headers) > 0 {
+		opts = append(opts, sdksubmit.WithHeaders(headers))
 	}
 
 	env, err := sdksubmit.Submit(queue, req.HandlerRef, req.Payload, opts...)
@@ -169,6 +176,28 @@ func (s *Server) buildEnvelope(instance, queue string, req *submitTaskRequest) (
 		return nil, NewProblem(CodeInvalidTask, instance, WithDetail(err.Error()))
 	}
 	return env, nil
+}
+
+// mergeTraceparent returns the task headers with the inbound HTTP traceparent
+// added when (a) the client did not already carry one in the body headers and
+// (b) the header is a well-formed W3C traceparent. The input map is never
+// mutated. A client-supplied traceparent always wins (explicit over ambient).
+func mergeTraceparent(headers map[string]string, reqTraceparent string) map[string]string {
+	if _, ok := headers[rdqlog.HeaderTraceparent]; ok {
+		return headers // client already set it — do not override
+	}
+	if reqTraceparent == "" {
+		return headers
+	}
+	if _, _, ok := rdqlog.ParseTraceparent(reqTraceparent); !ok {
+		return headers // ignore a malformed inbound header
+	}
+	merged := make(map[string]string, len(headers)+1)
+	for k, v := range headers {
+		merged[k] = v
+	}
+	merged[rdqlog.HeaderTraceparent] = reqTraceparent
+	return merged
 }
 
 // enqueueAndGet calls Enqueue then Get so that a re-submit of an existing id
