@@ -17,6 +17,14 @@ application {
     mainClass.set("io.github.srjn45.rdq.example.CrossLangWorkerRunner")
 }
 
+// CrossLangWorkerRunner is an integration-test fixture (subprocess entry point),
+// not library code with a unit-test coverage obligation.  Disable the JaCoCo
+// coverage gate for this module; the 0.80 minimum still applies to :client and
+// :worker (the published library modules).
+tasks.named<JacocoCoverageVerification>("jacocoTestCoverageVerification") {
+    enabled = false
+}
+
 dependencies {
     // Main sources: runner needs the worker + JDBC driver.
     implementation(project(":worker"))

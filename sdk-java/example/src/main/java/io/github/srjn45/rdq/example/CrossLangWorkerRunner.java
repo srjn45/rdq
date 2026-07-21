@@ -16,31 +16,30 @@
 
 package io.github.srjn45.rdq.example;
 
-import io.github.srjn45.rdq.client.envelope.Attempt;
 import io.github.srjn45.rdq.client.envelope.Envelope;
-import io.github.srjn45.rdq.client.envelope.Outcome;
+import io.github.srjn45.rdq.worker.engine.Backoff;
+import io.github.srjn45.rdq.worker.engine.Handler;
+import io.github.srjn45.rdq.worker.engine.HandlerRegistry;
+import io.github.srjn45.rdq.worker.engine.QueueSpec;
+import io.github.srjn45.rdq.worker.engine.Worker;
 import io.github.srjn45.rdq.worker.postgres.PostgresStorage;
-import io.github.srjn45.rdq.worker.spi.Claimed;
 import io.github.srjn45.rdq.worker.spi.Storage;
 import org.postgresql.ds.PGSimpleDataSource;
 
 import java.time.Duration;
-import java.time.Instant;
-import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Subprocess entry point for the T8.2 cross-language e2e integration test.
  *
- * <p>This runner is intentionally a thin direct-SPI client rather than using
- * {@link io.github.srjn45.rdq.worker.engine.Worker}.  The Java Worker computes
- * {@code attempt_no} as {@code task.attemptCount() + 1}, which collides with
- * existing {@code rdq_attempt} rows after a redrive (attempt_count is reset to 0
- * by Redrive but the history rows are preserved — a UNIQUE(task_id, attempt_no)
- * violation).  This is the Java-side equivalent of the T5.7 bug fixed on the Go
- * engine.  Using direct SPI here and computing the correct
- * {@code task.attempts().size() + 1} avoids the collision and proves cross-language
- * wire compatibility independently of the Worker bug.  A follow-up task should
- * apply the T5.7-equivalent fix to Worker.java.
+ * <p>Runs the real Java {@link Worker} engine against a shared PostgreSQL backend to
+ * claim and complete a redriven task — proving full cross-language wire compatibility
+ * between the Go API/engine and the Java Worker.  The Worker now correctly separates
+ * the attempt budget counter ({@code attemptCount()+1}, for retry-budget and backoff
+ * decisions) from the monotonic history sequence ({@code attempts().size()+1}, for the
+ * persisted {@code rdq_attempt.attempt_no}) so that a redriven task's preserved
+ * history rows do not collide with the fresh-budget attempt (T5.7-class fix).
  *
  * <p><b>Required environment variables:</b>
  * <pre>
@@ -50,17 +49,17 @@ import java.util.List;
  *   RDQ_PG_USER        Database user    (e.g. rdq)
  *   RDQ_PG_PASS        Database password
  *   RDQ_QUEUE          Queue name to claim from
- *   RDQ_HANDLER_REF    Handler reference to match (informational; any task claimed)
+ *   RDQ_HANDLER_REF    Handler reference the task was submitted with
  *   RDQ_TASK_ID        Task ID to wait for
  * </pre>
  *
- * <p>Exits 0 when the task reaches SUCCEEDED, 1 on timeout or error.
+ * <p>Exits 0 when the task is handled and stored as SUCCEEDED, 1 on timeout or error.
  */
 public final class CrossLangWorkerRunner {
 
     private static final Duration POLL_INTERVAL = Duration.ofMillis(100);
-    private static final Duration LEASE          = Duration.ofSeconds(10);
-    private static final Duration TIMEOUT        = Duration.ofSeconds(90);
+    private static final Duration LEASE         = Duration.ofSeconds(10);
+    private static final Duration TIMEOUT       = Duration.ofSeconds(90);
 
     private CrossLangWorkerRunner() {}
 
@@ -72,6 +71,7 @@ public final class CrossLangWorkerRunner {
         String user       = requireEnv("RDQ_PG_USER");
         String pass       = requireEnv("RDQ_PG_PASS");
         String queue      = requireEnv("RDQ_QUEUE");
+        String handlerRef = requireEnv("RDQ_HANDLER_REF");
         String taskId     = requireEnv("RDQ_TASK_ID");
 
         PGSimpleDataSource ds = new PGSimpleDataSource();
@@ -82,56 +82,69 @@ public final class CrossLangWorkerRunner {
         Storage store = PostgresStorage.open(ds);
 
         System.out.printf("[crosslang-runner] connected to postgres %s:%s/%s; "
-            + "waiting for task %s on queue %s%n", host, port, db, taskId, queue);
+            + "waiting for task %s on queue %s via real Worker%n",
+            host, port, db, taskId, queue);
 
-        Instant deadline = Instant.now().plus(TIMEOUT);
-        try {
-            while (Instant.now().isBefore(deadline)) {
-                List<Claimed> claimed = store.claimDue(queue, 1, LEASE);
-                for (Claimed c : claimed) {
-                    Envelope task = c.task();
-                    if (!taskId.equals(task.id())) {
-                        // Unexpected task: abandon (lease will expire naturally).
-                        System.out.printf("[crosslang-runner] ignoring unexpected task %s%n", task.id());
-                        continue;
-                    }
+        // Fires inside handle() when our target task is claimed.  We then stop
+        // the worker and join its thread to ensure store.complete() finishes
+        // before we exit.
+        CountDownLatch done = new CountDownLatch(1);
 
-                    // Compute attempt_no as the next position in the MONOTONIC history
-                    // sequence — NOT task.attemptCount()+1, which resets to 0 after a
-                    // redrive and would collide with existing attempt rows (T5.7-class bug).
-                    int historySize = task.attempts() != null ? task.attempts().size() : 0;
-                    int attemptNo   = historySize + 1;
+        HandlerRegistry registry = new HandlerRegistry();
+        registry.register(handlerRef, new Handler() {
+            @Override
+            public String version() { return ""; }
 
-                    Instant now = Instant.now();
-                    Attempt att = Attempt.builder()
-                        .attemptNo(attemptNo)
-                        .startedAt(now)
-                        .finishedAt(now)
-                        .outcome(Outcome.SUCCESS)
-                        .build();
-
-                    store.complete(task.id(), c.token(), att);
-
-                    System.out.printf("[crosslang-runner] task %s SUCCEEDED "
-                        + "(attempt_no=%d, history_before=%d)%n",
-                        task.id(), attemptNo, historySize);
-                    System.exit(0);
+            @Override
+            public void handle(Envelope task) {
+                System.out.printf("[crosslang-runner] Worker.handle task %s%n", task.id());
+                if (taskId.equals(task.id())) {
+                    done.countDown();
                 }
+            }
+        });
 
-                Thread.sleep(POLL_INTERVAL.toMillis());
+        QueueSpec spec = QueueSpec.builder(queue)
+            .maxAttempts(1)
+            .backoff(Backoff.builder().initial(LEASE).build())
+            .lease(LEASE)
+            .pollInterval(POLL_INTERVAL)
+            .build();
+
+        Worker worker = Worker.builder(store, registry)
+            .addQueue(spec)
+            .sweepInterval(Duration.ZERO)
+            .build();
+
+        Thread workerThread = new Thread(() -> {
+            try {
+                worker.run();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }, "rdq-crosslang-worker");
+        workerThread.setDaemon(true);
+        workerThread.start();
+
+        try {
+            boolean ok = done.await(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+            worker.stop();
+            // Join the worker thread so store.complete() finishes before we exit.
+            workerThread.join(LEASE.toMillis() * 3);
+            if (ok) {
+                System.out.printf("[crosslang-runner] task %s SUCCEEDED%n", taskId);
+                System.exit(0);
+            } else {
+                System.err.printf("[crosslang-runner] TIMEOUT: task %s did not appear "
+                    + "within %s on queue %s%n", taskId, TIMEOUT, queue);
+                System.exit(1);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             System.err.println("[crosslang-runner] interrupted");
-            System.exit(1);
-        } catch (Exception e) {
-            System.err.printf("[crosslang-runner] error: %s%n", e);
+            worker.stop();
             System.exit(1);
         }
-
-        System.err.printf("[crosslang-runner] TIMEOUT: task %s did not appear "
-            + "within %s on queue %s%n", taskId, TIMEOUT, queue);
-        System.exit(1);
     }
 
     private static String requireEnv(String name) {

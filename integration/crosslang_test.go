@@ -23,12 +23,12 @@
 //
 //  4. The Go engine is stopped before the redrive.  The only worker left in play
 //     is the Java subprocess, launched via `./gradlew :example:run` against the
-//     same Postgres DSN.  The Java runner (CrossLangWorkerRunner.main) uses the
-//     Java PostgresStorage SPI directly and computes the attempt_no as
-//     task.attempts().size()+1 (mirroring the Go T5.7 fix).  This is intentional:
-//     Java Worker.java uses task.attemptCount()+1 which collides with the
-//     preserved attempt history after a redrive — a Java-side T5.7-equivalent
-//     bug that must be fixed separately (see PR description).
+//     same Postgres DSN.  The subprocess runs the REAL Java Worker engine
+//     (Worker.java), which now correctly separates budgetNo (attemptCount()+1,
+//     for retry budget and backoff) from historyNo (attempts().size()+1, for the
+//     persisted attempt_no) — the Java-side T5.7-equivalent fix bundled with this
+//     test.  No UNIQUE(task_id,attempt_no) collision with the preserved DLQ-phase
+//     history rows.
 //
 //  5. The Java subprocess exits 0; the Go API confirms SUCCEEDED.
 //
