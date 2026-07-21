@@ -8,6 +8,24 @@ base {
     archivesName.set("rdq-java-worker")
 }
 
+// The Postgres storage binding (io.github.srjn45.rdq.worker.postgres) is covered
+// by Docker-based testcontainers tests that are skipped when Docker is unavailable.
+// Exclude it from the coverage gate so the instruction ratio reflects engine/SPI/policy
+// code — all of which is covered by unit tests.
+val postgresExclude = listOf("io/github/srjn45/rdq/worker/postgres/**")
+
+tasks.named<JacocoReport>("jacocoTestReport") {
+    classDirectories.setFrom(
+        classDirectories.files.map { tree -> fileTree(tree) { exclude(postgresExclude) } }
+    )
+}
+
+tasks.named<JacocoCoverageVerification>("jacocoTestCoverageVerification") {
+    classDirectories.setFrom(
+        classDirectories.files.map { tree -> fileTree(tree) { exclude(postgresExclude) } }
+    )
+}
+
 dependencies {
     api(project(":client"))
 
