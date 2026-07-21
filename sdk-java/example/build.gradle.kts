@@ -1,9 +1,11 @@
 // rdq-java-example — runnable consumer example + T8.2 cross-language runner.
 //
-// Main sources hold CrossLangWorkerRunner (a thin direct-SPI subprocess used by
-// the Go cross-language e2e test to prove Java can claim and complete a task
-// from a shared Postgres).  Test sources hold RetryExampleTest (the T7.6 JUnit
-// quickstart).  Neither contributes to the JaCoCo coverage gate.
+// Main sources hold CrossLangWorkerRunner: the T8.2 flagship subprocess that
+// drives the REAL Java Worker engine (Worker.java + PostgresStorage) against a
+// shared Postgres to claim and complete a redriven task, proving cross-language
+// wire compatibility between the Go API/engine and the Java Worker.  Test
+// sources hold RetryExampleTest (the T7.6 JUnit quickstart).  Neither
+// contributes to the JaCoCo coverage gate.
 
 plugins {
     application
