@@ -41,31 +41,9 @@ const defaultDLQPageLimit = 100
 // is rejected with ErrStaleCursor rather than silently mis-paging.
 const dlqCursorPrefix = "pgdlq1:"
 
-// envelopeColumns is the shared envelope-column projection (design 02 §4): the
-// columns common to rdq_task and rdq_dlq_task, in taskRow field order. It
-// excludes the storage-managed columns (claim_token) and the DLQ-only
-// denormalizations (dead_lettered_at, error_type).
-const envelopeColumns = `id, queue, envelope_version, handler_ref, handler_version, ` +
-	`payload, payload_content_type, payload_ref, headers, status, ` +
-	`attempt_count, redrive_count, next_attempt_at, lease_expires_at, created_at, residual`
-
-// rowScanner is the read side of *sql.Row and *sql.Rows.
-type rowScanner interface {
-	Scan(dest ...any) error
-}
-
-// scanEnvelopeColumns scans the envelopeColumns projection into a taskRow. The
-// column order must match envelopeColumns exactly.
-func scanEnvelopeColumns(sc rowScanner, dst *taskRow, extra ...any) error {
-	dest := []any{
-		&dst.ID, &dst.Queue, &dst.EnvelopeVersion, &dst.HandlerRef, &dst.HandlerVersion,
-		&dst.Payload, &dst.PayloadContentType, &dst.PayloadRef, &dst.Headers, &dst.Status,
-		&dst.AttemptCount, &dst.RedriveCount, &dst.NextAttemptAt, &dst.LeaseExpiresAt,
-		&dst.CreatedAt, &dst.Residual,
-	}
-	dest = append(dest, extra...)
-	return sc.Scan(dest...)
-}
+// The shared row helpers this file relies on — the taskColumns projection,
+// rowScanner, scanTaskRow, the querier interface, and loadAttempts — are declared
+// in claim.go (T2.3) and reused here unchanged.
 
 // DLQList pages the dead-letter queue for queue with stable cursor-based
 // pagination (design 02 §3 invariant 8). Envelopes omit attempt bodies unless
@@ -106,7 +84,7 @@ func (s *Store) DLQList(ctx context.Context, queue string, f spi.DLQFilter, page
 	}
 	// Fetch one extra row to detect whether a further page exists.
 	args = append(args, limit+1)
-	query := "SELECT " + envelopeColumns + ", dead_lettered_at FROM rdq_dlq_task WHERE " +
+	query := "SELECT " + taskColumns + ", dead_lettered_at FROM rdq_dlq_task WHERE " +
 		strings.Join(conds, " AND ") +
 		" ORDER BY dead_lettered_at, id LIMIT $" + strconv.Itoa(len(args))
 
@@ -123,7 +101,8 @@ func (s *Store) DLQList(ctx context.Context, queue string, f spi.DLQFilter, page
 	collected := make([]paged, 0, limit+1)
 	for rows.Next() {
 		var p paged
-		if err := scanEnvelopeColumns(rows, &p.row, &p.deadAt); err != nil {
+		p.row, err = scanTaskRow(rows, &p.deadAt)
+		if err != nil {
 			return nil, "", fmt.Errorf("rdq/postgres: DLQList scan: %w", err)
 		}
 		collected = append(collected, p)
@@ -143,7 +122,7 @@ func (s *Store) DLQList(ctx context.Context, queue string, f spi.DLQFilter, page
 	for _, p := range collected {
 		var attempts []attemptRow
 		if f.IncludeAttempts {
-			attempts, err = s.loadAttempts(ctx, p.row.ID)
+			attempts, err = loadAttempts(ctx, s.db, p.row.ID)
 			if err != nil {
 				return nil, "", err
 			}
@@ -161,18 +140,18 @@ func (s *Store) DLQList(ctx context.Context, queue string, f spi.DLQFilter, page
 // with full attempt history; ErrNotFound if absent. A task lives in exactly one
 // of rdq_task / rdq_dlq_task, so the UNION resolves to at most one row.
 func (s *Store) Get(ctx context.Context, id spi.TaskID) (envelope.Envelope, error) {
-	const q = "SELECT " + envelopeColumns + " FROM rdq_task WHERE id = $1 " +
+	const q = "SELECT " + taskColumns + " FROM rdq_task WHERE id = $1 " +
 		"UNION ALL " +
-		"SELECT " + envelopeColumns + " FROM rdq_dlq_task WHERE id = $1"
+		"SELECT " + taskColumns + " FROM rdq_dlq_task WHERE id = $1"
 
-	var row taskRow
-	if err := scanEnvelopeColumns(s.db.QueryRowContext(ctx, q, id), &row); err != nil {
+	row, err := scanTaskRow(s.db.QueryRowContext(ctx, q, id))
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return envelope.Envelope{}, spi.ErrNotFound
 		}
 		return envelope.Envelope{}, fmt.Errorf("rdq/postgres: Get query: %w", err)
 	}
-	attempts, err := s.loadAttempts(ctx, id)
+	attempts, err := loadAttempts(ctx, s.db, id)
 	if err != nil {
 		return envelope.Envelope{}, err
 	}
@@ -255,32 +234,6 @@ SELECT count(*) FROM purged`
 		return 0, fmt.Errorf("rdq/postgres: Purge: %w", err)
 	}
 	return n, nil
-}
-
-// loadAttempts reads a task's ordered attempt history from rdq_attempt.
-func (s *Store) loadAttempts(ctx context.Context, taskID string) ([]attemptRow, error) {
-	const q = `SELECT task_id, attempt_no, started_at, finished_at, outcome,
-	                  error_type, error_message, error_detail, error_stack, residual
-	           FROM rdq_attempt WHERE task_id = $1 ORDER BY attempt_no`
-	rows, err := s.db.QueryContext(ctx, q, taskID)
-	if err != nil {
-		return nil, fmt.Errorf("rdq/postgres: loading attempts: %w", err)
-	}
-	defer rows.Close()
-
-	var out []attemptRow
-	for rows.Next() {
-		var a attemptRow
-		if err := rows.Scan(&a.TaskID, &a.AttemptNo, &a.StartedAt, &a.FinishedAt, &a.Outcome,
-			&a.ErrorType, &a.ErrorMessage, &a.ErrorDetail, &a.ErrorStack, &a.Residual); err != nil {
-			return nil, fmt.Errorf("rdq/postgres: scanning attempt: %w", err)
-		}
-		out = append(out, a)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rdq/postgres: attempt rows: %w", err)
-	}
-	return out, nil
 }
 
 // dlqSelectorClause builds the WHERE clause selecting DEAD tasks in queue per
