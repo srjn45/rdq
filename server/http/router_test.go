@@ -96,17 +96,41 @@ func TestHealthEndpointsRejectNonGET(t *testing.T) {
 	}
 }
 
-// TestUnknownRoutesAreProblemJSON404: both the top-level catch-all and the
-// (currently route-less) /v1 subtree return a problem+json 404, not the net/http
-// plaintext default.
+// TestUnknownRoutesAreProblemJSON404: both the top-level catch-all and unknown
+// paths under /v1 return a problem+json 404, not the net/http plaintext default.
 func TestUnknownRoutesAreProblemJSON404(t *testing.T) {
-	for _, path := range []string{"/nope", "/v1/", "/v1/queues/q/tasks", "/v1/anything"} {
+	for _, path := range []string{"/nope", "/v1/", "/v1/anything"} {
 		rec := do(t, New(), http.MethodGet, path)
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("%s status = %d, want 404", path, rec.Code)
 		}
 		if p := decodeProblem(t, rec); p.Code != CodeNotFound {
 			t.Errorf("%s code = %q, want NOT_FOUND", path, p.Code)
+		}
+	}
+}
+
+// TestDataPlaneRoutesRejectWrongMethod: data-plane routes are mounted; wrong
+// methods return 405 METHOD_NOT_ALLOWED (not 404) with an Allow header.
+func TestDataPlaneRoutesRejectWrongMethod(t *testing.T) {
+	cases := []struct {
+		method, path string
+		allow        string
+	}{
+		{http.MethodGet, "/v1/queues/q/tasks", http.MethodPost},
+		{http.MethodGet, "/v1/queues/q/tasks:batch", http.MethodPost},
+		{http.MethodPost, "/v1/tasks/01ARZ3NDEKTSV4RRFFQ69G5FAV", http.MethodGet},
+	}
+	for _, tc := range cases {
+		rec := do(t, New(), tc.method, tc.path)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s %s: status = %d, want 405", tc.method, tc.path, rec.Code)
+		}
+		if got := rec.Header().Get("Allow"); got != tc.allow {
+			t.Errorf("%s %s: Allow = %q, want %q", tc.method, tc.path, got, tc.allow)
+		}
+		if p := decodeProblem(t, rec); p.Code != CodeMethodNotAllowed {
+			t.Errorf("%s %s: code = %q, want METHOD_NOT_ALLOWED", tc.method, tc.path, p.Code)
 		}
 	}
 }
