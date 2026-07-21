@@ -38,7 +38,8 @@ func (s *Server) buildHandler() http.Handler {
 func (s *Server) v1Handler() http.Handler {
 	mux := http.NewServeMux()
 	s.mountTasks(mux) // T5.2: data plane (submit/batch/get)
-	// s.mountDLQ(mux)   — T5.3: DLQ / ops plane
+	s.mountDLQ(mux)   // T5.3: DLQ browse/mutate + stats
+	s.mountOps(mux)   // T5.3: pause/resume
 	// s.mountAdmin(mux) — T5.4: admin / config plane
 	mux.HandleFunc("/", s.handleNotFound)
 	return mux
