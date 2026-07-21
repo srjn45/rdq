@@ -22,4 +22,4 @@ plugins {
 
 rootProject.name = "rdq-java"
 
-include("client", "worker")
+include("client", "worker", "example")
