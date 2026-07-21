@@ -6,12 +6,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"sync"
 	"time"
 
 	"github.com/srjn45/rdq/core/config"
 	"github.com/srjn45/rdq/core/envelope"
+	rdqlog "github.com/srjn45/rdq/core/log"
 	"github.com/srjn45/rdq/core/metrics"
 	"github.com/srjn45/rdq/core/policy"
 	"github.com/srjn45/rdq/core/registry"
@@ -172,6 +174,10 @@ type Worker struct {
 	// counter events. Nil means no metrics are emitted.
 	recorder metrics.Recorder
 
+	// logger emits a structured record on every state transition (T6.2). A nil
+	// *rdqlog.Logger is a safe no-op, so this is optional; wire it via WithLogger.
+	logger *rdqlog.Logger
+
 	// handlers tracks in-flight handler goroutines so Run can drain them on stop.
 	// loops tracks the claim loops and the sweeper.
 	handlers sync.WaitGroup
@@ -231,6 +237,15 @@ func WithRecorder(r metrics.Recorder) Option {
 			w.recorder = r
 		}
 	}
+}
+
+// WithLogger installs a structured logger that emits one record on every task
+// state transition (claimed, succeeded, retry_scheduled, dead_lettered,
+// abandoned), each carrying the task id + queue and — when a traceparent rides
+// in the task headers — the W3C trace_id (T6.2). Payloads are never logged in
+// full (FR-25). Nil disables transition logging.
+func WithLogger(l *rdqlog.Logger) Option {
+	return func(w *Worker) { w.logger = l }
 }
 
 // NewWorker builds a worker for the given queues. store and reg are required; each
@@ -398,7 +413,12 @@ func (w *Worker) process(q *queueState, c spi.Claimed) {
 
 	task := c.Task
 	token := c.Token
-	ctx := context.Background()
+	// Carry the task's inbound trace context (submit → retry) through the whole
+	// run so every transition log and the handler invocation share one trace_id.
+	ctx := rdqlog.ContextWithTraceparent(context.Background(), rdqlog.TraceparentFromHeaders(task.Headers))
+
+	// A due task was leased and is about to be routed/run — the first transition.
+	w.logger.Transition(ctx, rdqlog.TransitionClaimed, task)
 
 	// Poison-pill guard: a task that already reached max_attempts (e.g. via
 	// repeated LEASE_EXPIRED reclaims) is dead-lettered without another run.
@@ -435,7 +455,12 @@ func (w *Worker) process(q *queueState, c spi.Claimed) {
 			Outcome:    envelope.OutcomeSuccess,
 		}
 		if cerr := w.store.Complete(ctx, task.ID, token, att); cerr != nil {
-			w.abandon(task, cerr)
+			w.abandon(ctx, task, cerr)
+		} else {
+			succeeded := task
+			succeeded.Status = envelope.StatusSucceeded
+			w.logger.Transition(ctx, rdqlog.TransitionSucceeded, succeeded,
+				slog.Int("attempt_no", attemptNo))
 		}
 		if w.recorder != nil && task.AttemptCount > 0 {
 			w.recorder.IncrSuccessAfterRetry(q.spec.Queue)
@@ -460,7 +485,13 @@ func (w *Worker) process(q *queueState, c spi.Claimed) {
 	exhausted := attemptNo >= q.spec.MaxAttempts
 	if verdict.Decision == policy.DecisionPermanent || exhausted {
 		if derr := w.store.DeadLetter(ctx, task.ID, token, att); derr != nil {
-			w.abandon(task, derr)
+			w.abandon(ctx, task, derr)
+		} else {
+			dead := task
+			dead.Status = envelope.StatusDead
+			w.logger.Transition(ctx, rdqlog.TransitionDeadLettered, dead,
+				slog.Int("attempt_no", attemptNo),
+				slog.String(rdqlog.KeyErrorType, errType))
 		}
 		if w.recorder != nil {
 			w.recorder.IncrDLQArrival(q.spec.Queue)
@@ -474,7 +505,15 @@ func (w *Worker) process(q *queueState, c spi.Claimed) {
 	delay := q.spec.Backoff.Delay(attemptNo, w.rng)
 	nextAt := finished.Add(delay)
 	if rerr := w.store.Reschedule(ctx, task.ID, token, att, nextAt); rerr != nil {
-		w.abandon(task, rerr)
+		w.abandon(ctx, task, rerr)
+	} else {
+		retried := task
+		retried.Status = envelope.StatusPending
+		retried.NextAttemptAt = &nextAt
+		w.logger.Transition(ctx, rdqlog.TransitionRetried, retried,
+			slog.Int("attempt_no", attemptNo),
+			slog.String(rdqlog.KeyErrorType, errType),
+			slog.Time(rdqlog.KeyNextAttemptAt, nextAt))
 	}
 	if w.recorder != nil {
 		w.recorder.IncrRetry(q.spec.Queue)
@@ -486,7 +525,11 @@ func (w *Worker) process(q *queueState, c spi.Claimed) {
 // — NOT the run context — so a drain lets an in-flight handler finish within its
 // lease rather than cancelling it.
 func (w *Worker) runHandler(q *queueState, h registry.Handler, task envelope.Envelope, token spi.ClaimToken) error {
-	hctx, cancel := context.WithCancel(context.Background())
+	// Root the handler context in Background (not the run context) so a drain lets
+	// an in-flight handler finish within its lease, but carry the task's trace
+	// context into it so the handler can propagate traceparent downstream (T6.2).
+	base := rdqlog.ContextWithTraceparent(context.Background(), rdqlog.TraceparentFromHeaders(task.Headers))
+	hctx, cancel := context.WithCancel(base)
 	defer cancel()
 
 	// Enforce the handler timeout with the injected clock (context.WithTimeout
@@ -556,7 +599,13 @@ func (w *Worker) deadLetter(ctx context.Context, q *queueState, task envelope.En
 		Error:      e,
 	}
 	if err := w.store.DeadLetter(ctx, task.ID, token, att); err != nil {
-		w.abandon(task, err)
+		w.abandon(ctx, task, err)
+	} else {
+		dead := task
+		dead.Status = envelope.StatusDead
+		w.logger.Transition(ctx, rdqlog.TransitionDeadLettered, dead,
+			slog.Int("attempt_no", att.AttemptNo),
+			slog.String(rdqlog.KeyErrorType, e.Type))
 	}
 	if w.recorder != nil {
 		w.recorder.IncrDLQArrival(q.spec.Queue)
@@ -566,7 +615,9 @@ func (w *Worker) deadLetter(ctx context.Context, q *queueState, task envelope.En
 // abandon reports that an outcome write was rejected (the lease was lost and the
 // task reclaimed elsewhere). The work is dropped; the store's at-least-once
 // guarantee means the task runs again after its lease expires.
-func (w *Worker) abandon(task envelope.Envelope, err error) {
+func (w *Worker) abandon(ctx context.Context, task envelope.Envelope, err error) {
+	w.logger.Transition(ctx, rdqlog.TransitionAbandoned, task,
+		slog.String(rdqlog.KeyErrorType, policy.ErrorType(err)))
 	if w.abandonHook != nil {
 		w.abandonHook(task, err)
 	}

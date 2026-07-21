@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"sync"
 
+	rdqlog "github.com/srjn45/rdq/core/log"
 	"github.com/srjn45/rdq/core/spi"
 	srvconfig "github.com/srjn45/rdq/server/config"
 )
@@ -27,8 +28,9 @@ type Server struct {
 	storage         spi.Storage
 	configStore     srvconfig.Store // T5.4: queue config CRUD + pause persistence
 	maxPayloadBytes int64
-	metricsHandler  http.Handler // /metrics — set via WithMetricsHandler (T6.1)
-	paused          sync.Map     // set[queue] → struct{}; in-process cache (ops.go)
+	metricsHandler  http.Handler   // /metrics — set via WithMetricsHandler (T6.1)
+	logger          *rdqlog.Logger // structured request/transition logger (T6.2)
+	paused          sync.Map       // set[queue] → struct{}; in-process cache (ops.go)
 }
 
 // Option configures a Server at construction.
@@ -67,7 +69,9 @@ func New(opts ...Option) *Server {
 	for _, opt := range opts {
 		opt(s)
 	}
-	s.handler = s.buildHandler()
+	// Wrap the routing tree in the request-logging / trace-propagation middleware
+	// (T6.2). Kept here so router.go's tree shape stays untouched.
+	s.handler = s.withLogging(s.buildHandler())
 	return s
 }
 
