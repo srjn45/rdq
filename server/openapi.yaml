@@ -134,6 +134,44 @@ paths:
         "503":
           $ref: "#/components/responses/StorageUnavailable"
 
+  /v1/queues/{queue}/tasks:batch:
+    post:
+      tags: [data-plane]
+      operationId: batchSubmitTasks
+      summary: Submit multiple tasks (per-item 207)
+      description: >
+        Enqueue multiple tasks in a single call. Each item is processed
+        independently — a failure on one item does not prevent others from
+        being enqueued. Returns 207 Multi-Status with per-item results
+        (design 04 §1, OI-2). Idempotent per-item: re-submitting the same id
+        to the same queue is a no-op for that item.
+      x-status: planned
+      parameters:
+        - $ref: "#/components/parameters/Queue"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: "#/components/schemas/SubmitTaskRequest"
+      responses:
+        "207":
+          description: Per-item results; see each item's `status` field.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BatchItemResult"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "422":
+          $ref: "#/components/responses/InvalidTask"
+        "503":
+          $ref: "#/components/responses/StorageUnavailable"
+
   /v1/tasks/{id}:
     get:
       tags: [data-plane]
@@ -318,6 +356,27 @@ components:
         status:
           type: string
           enum: [PENDING, IN_FLIGHT, SUCCEEDED, DEAD]
+
+    BatchItemResult:
+      type: object
+      description: >
+        One entry in the 207 Multi-Status response for batch submit.
+        `status` mirrors the HTTP status that would have been returned for a
+        single submit (202 on success, 4xx on per-item error).
+      required: [index, status]
+      properties:
+        index:
+          type: integer
+          description: Zero-based position of this item in the request array.
+        status:
+          type: integer
+          description: HTTP status for this item (202, 409, 413, 422, …).
+        envelope:
+          $ref: "#/components/schemas/Envelope"
+          description: Present on success (status 202).
+        error:
+          $ref: "#/components/schemas/Problem"
+          description: Present on failure.
 
     Stats:
       type: object

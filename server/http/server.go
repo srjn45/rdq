@@ -10,14 +10,20 @@
 // auth (T5.6) mount onto the seams established here.
 package http
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/srjn45/rdq/core/spi"
+)
 
 // Server is the assembled HTTP surface. Construct it with New and mount its
 // Handler on an http.Server (lifecycle/graceful-drain wiring lands with the
 // server binary, design 04 §8).
 type Server struct {
-	probes  []namedProbe
-	handler http.Handler
+	probes          []namedProbe
+	handler         http.Handler
+	storage         spi.Storage
+	maxPayloadBytes int64
 }
 
 // Option configures a Server at construction.
@@ -33,9 +39,20 @@ func WithReadinessProbe(name string, probe ReadinessProbe) Option {
 	}
 }
 
+// WithStorage injects the task storage backend used by the data plane (T5.2).
+func WithStorage(st spi.Storage) Option {
+	return func(s *Server) { s.storage = st }
+}
+
+// WithMaxPayloadBytes overrides the server-wide decoded-payload ceiling (default
+// defaultMaxPayloadBytes). Per-queue limits layer on top once T5.4 lands.
+func WithMaxPayloadBytes(n int64) Option {
+	return func(s *Server) { s.maxPayloadBytes = n }
+}
+
 // New builds a Server with the given options and wires the routing tree.
 func New(opts ...Option) *Server {
-	s := &Server{}
+	s := &Server{maxPayloadBytes: defaultMaxPayloadBytes}
 	for _, opt := range opts {
 		opt(s)
 	}

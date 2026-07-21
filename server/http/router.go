@@ -31,12 +31,14 @@ func (s *Server) buildHandler() http.Handler {
 	return mux
 }
 
-// v1Handler serves the /v1 subtree (prefix already stripped). It is the seam
-// T5.2–T5.4 extend with the real routes; until then every path under /v1 is an
-// unknown route and returns the same problem+json 404 as the top-level catch-all.
+// v1Handler serves the /v1 subtree (prefix already stripped). Each task
+// family adds its routes via a dedicated mount helper called here, keeping
+// individual edits small so T5.3/T5.4 can add theirs without churn.
 func (s *Server) v1Handler() http.Handler {
 	mux := http.NewServeMux()
-	// registerV1Routes(mux) — data plane / DLQ / admin land in later tasks.
+	s.mountTasks(mux) // T5.2: data plane (submit/batch/get)
+	// s.mountDLQ(mux)   — T5.3: DLQ / ops plane
+	// s.mountAdmin(mux) — T5.4: admin / config plane
 	mux.HandleFunc("/", s.handleNotFound)
 	return mux
 }
