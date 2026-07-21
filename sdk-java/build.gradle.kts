@@ -1,91 +1,77 @@
+import com.github.spotbugs.snom.Confidence
+import com.github.spotbugs.snom.Effort
+import com.github.spotbugs.snom.SpotBugsExtension
+import com.github.spotbugs.snom.SpotBugsTask
+
 plugins {
-    `java-library`
-    id("com.diffplug.spotless") version "6.23.0"
-    id("com.github.spotbugs") version "6.1.11"
-    jacoco
+    id("com.diffplug.spotless") version "6.23.0" apply false
+    id("com.github.spotbugs") version "6.1.11" apply false
 }
 
-group = "com.github.srjn45"
-version = "2.1.0"
+subprojects {
+    apply(plugin = "java-library")
+    apply(plugin = "com.diffplug.spotless")
+    apply(plugin = "com.github.spotbugs")
+    apply(plugin = "jacoco")
 
-repositories {
-    mavenCentral()
-}
+    group = "io.github.srjn45"
+    version = "2.1.0"
 
-dependencies {
-    implementation(libs.slf4j)
-
-    testImplementation(libs.junit.jupiter)
-    testImplementation(libs.assertj)
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
-}
-
-java {
-    toolchain {
-        languageVersion.set(JavaLanguageVersion.of(21))
+    repositories {
+        mavenCentral()
     }
-}
 
-spotbugs {
-    toolVersion.set("4.8.1")
-    ignoreFailures.set(false)
-    effort.set(com.github.spotbugs.snom.Effort.MAX)
-    reportLevel.set(com.github.spotbugs.snom.Confidence.LOW)  // <-- Here use enum, import required
-}
-
-tasks.withType<com.github.spotbugs.snom.SpotBugsTask>().configureEach {
-    reports {
-        create("xml") {
-            required.set(false)
+    configure<JavaPluginExtension> {
+        toolchain {
+            languageVersion.set(JavaLanguageVersion.of(21))
         }
-        create("html") {
-            required.set(true)
-            outputLocation.set(layout.buildDirectory.file("reports/spotbugs/spotbugs.html"))
-        }
+        withSourcesJar()
     }
-}
 
-tasks.named<Test>("test") {
-    useJUnitPlatform()
-}
-
-jacoco {
-    toolVersion = "0.8.10"
-}
-
-tasks.jacocoTestReport {
-    dependsOn(tasks.test)
-    reports {
-        xml.required.set(true)
-        html.required.set(true)
-        html.outputLocation.set(layout.buildDirectory.dir("jacocoHtml"))
+    configure<SpotBugsExtension> {
+        toolVersion.set("4.8.1")
+        ignoreFailures.set(false)
+        effort.set(Effort.MAX)
+        reportLevel.set(Confidence.LOW)
     }
-}
 
-val jacocoTestReport = tasks.named<JacocoReport>("jacocoTestReport").get()
-
-tasks.jacocoTestCoverageVerification {
-    dependsOn(tasks.test)
-
-    violationRules {
-        rule {
-            limit {
-                minimum = 0.80.toBigDecimal()
+    tasks.withType<SpotBugsTask>().configureEach {
+        reports {
+            create("xml") {
+                required.set(false)
+            }
+            create("html") {
+                required.set(true)
+                outputLocation.set(layout.buildDirectory.file("reports/spotbugs/spotbugs.html"))
             }
         }
     }
 
-    // Use the exact classDirs, sourceDirs, executionData from jacocoTestReport
-    classDirectories = jacocoTestReport.classDirectories
-    sourceDirectories = jacocoTestReport.sourceDirectories
-    executionData = jacocoTestReport.executionData
-}
+    tasks.withType<Test>().configureEach {
+        useJUnitPlatform()
+    }
 
-val sourcesJar by tasks.registering(Jar::class) {
-    archiveClassifier.set("sources")
-    from(sourceSets.main.get().allSource)
-}
+    configure<JacocoPluginExtension> {
+        toolVersion = "0.8.10"
+    }
 
-artifacts {
-    add("archives", sourcesJar.get())
+    tasks.named<JacocoReport>("jacocoTestReport") {
+        dependsOn(tasks.named("test"))
+        reports {
+            xml.required.set(true)
+            html.required.set(true)
+            html.outputLocation.set(layout.buildDirectory.dir("jacocoHtml"))
+        }
+    }
+
+    tasks.named<JacocoCoverageVerification>("jacocoTestCoverageVerification") {
+        dependsOn(tasks.named("test"))
+        violationRules {
+            rule {
+                limit {
+                    minimum = 0.80.toBigDecimal()
+                }
+            }
+        }
+    }
 }
