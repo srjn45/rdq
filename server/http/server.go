@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/srjn45/rdq/core/spi"
+	srvconfig "github.com/srjn45/rdq/server/config"
 )
 
 // Server is the assembled HTTP surface. Construct it with New and mount its
@@ -24,9 +25,10 @@ type Server struct {
 	probes          []namedProbe
 	handler         http.Handler
 	storage         spi.Storage
+	configStore     srvconfig.Store // T5.4: queue config CRUD + pause persistence
 	maxPayloadBytes int64
 	metricsHandler  http.Handler // /metrics — set via WithMetricsHandler (T6.1)
-	paused          sync.Map     // set[queue] → struct{}; managed by pause/resume (ops.go)
+	paused          sync.Map     // set[queue] → struct{}; in-process cache (ops.go)
 }
 
 // Option configures a Server at construction.
@@ -45,6 +47,12 @@ func WithReadinessProbe(name string, probe ReadinessProbe) Option {
 // WithStorage injects the task storage backend used by the data plane (T5.2).
 func WithStorage(st spi.Storage) Option {
 	return func(s *Server) { s.storage = st }
+}
+
+// WithConfigStore injects the ConfigStore used by the admin plane (T5.4).
+// When set, pause/resume state is persisted there and IsPaused reads from it.
+func WithConfigStore(cs srvconfig.Store) Option {
+	return func(s *Server) { s.configStore = cs }
 }
 
 // WithMaxPayloadBytes overrides the server-wide decoded-payload ceiling (default

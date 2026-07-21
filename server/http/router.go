@@ -40,7 +40,7 @@ func (s *Server) v1Handler() http.Handler {
 	s.mountTasks(mux) // T5.2: data plane (submit/batch/get)
 	s.mountDLQ(mux)   // T5.3: DLQ browse/mutate + stats
 	s.mountOps(mux)   // T5.3: pause/resume
-	// s.mountAdmin(mux) — T5.4: admin / config plane
+	s.mountAdmin(mux) // T5.4: admin / config plane
 	mux.HandleFunc("/", s.handleNotFound)
 	return mux
 }

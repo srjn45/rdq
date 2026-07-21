@@ -22,7 +22,8 @@ func (s *Server) mountOps(mux *http.ServeMux) {
 //	POST /admin/queues/{queue}:pause  → 204 (stop claiming; submits still accepted)
 //	POST /admin/queues/{queue}:resume → 204
 //
-// Pause state is held in-process until ConfigStore (T5.4) persists it durably.
+// Pause state is written to both the in-process sync.Map (fast path for claim
+// loops) and the ConfigStore (T5.4) so it survives server restarts.
 func (s *Server) handleAdminQueueAction(w http.ResponseWriter, r *http.Request) {
 	const prefix = "/admin/queues/"
 	rest := strings.TrimPrefix(r.URL.Path, prefix)
@@ -49,16 +50,26 @@ func (s *Server) handleAdminQueueAction(w http.ResponseWriter, r *http.Request) 
 	switch action {
 	case "pause":
 		s.paused.Store(queue, struct{}{})
+		if s.configStore != nil {
+			_ = s.configStore.SetPaused(queue, true)
+		}
 		w.WriteHeader(http.StatusNoContent)
 	case "resume":
 		s.paused.Delete(queue)
+		if s.configStore != nil {
+			_ = s.configStore.SetPaused(queue, false)
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
-// IsPaused reports whether claiming is suspended for queue. Consumed by the
-// engine claim loop once T5.4 wires durable ConfigStore.
+// IsPaused reports whether claiming is suspended for queue. When a ConfigStore
+// is present (T5.4), it is authoritative for pause state (survives restart);
+// otherwise the in-process sync.Map is used (in-memory only).
 func (s *Server) IsPaused(queue string) bool {
+	if s.configStore != nil {
+		return s.configStore.IsPaused(queue)
+	}
 	_, ok := s.paused.Load(queue)
 	return ok
 }

@@ -236,6 +236,13 @@ func requirePositive(d *Duration, path, field string) error {
 	return nil
 }
 
+// ValidateQueue validates a single QueueConfig block by name. It is called by
+// the admin API before persisting config via PUT /admin/queues/{queue}/config
+// (design 04 §3). The queue name is used only in error messages.
+func ValidateQueue(qc *QueueConfig, queue string) error {
+	return validateQueueConfig(qc, "queues."+queue)
+}
+
 // errf builds a validation error prefixed with the package name and the block
 // path, so a message reads e.g. `config: queues.payments.charge: ...`.
 func errf(path, format string, args ...any) error {

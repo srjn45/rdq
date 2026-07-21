@@ -22,7 +22,9 @@ import (
 // migrations; CheckSchemaVersion refuses to run an engine against a database
 // carrying a different version. Bump it whenever a migration changes the schema
 // contract — the Java Postgres binding (T7.4) tracks the same number.
-const SchemaVersion = 1
+//
+// v1 → v2: added rdq_queue_config (ConfigStore, T5.4, design 04 §3).
+const SchemaVersion = 2
 
 // migrationLedger is the runner's bookkeeping table: which migration files have
 // been applied. It is distinct from rdq_schema_version (the startup gate) —
