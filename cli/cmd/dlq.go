@@ -106,14 +106,18 @@ func runDLQList(ctx context.Context, w io.Writer, tr Transport, args []string) e
 		fmt.Fprintln(os.Stderr, "Usage: rdq dlq list <queue> [flags]")
 		fs.PrintDefaults()
 	}
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() < 1 {
+	// Extract the queue positional arg before calling fs.Parse so that flags
+	// that follow the queue name (e.g. --limit, --error-type) are parsed
+	// correctly. Go's flag package stops at the first non-flag argument, so
+	// passing args[1:] ensures all flag arguments are seen.
+	if len(args) < 1 {
 		fs.Usage()
 		return fmt.Errorf("queue name required")
 	}
-	queue := fs.Arg(0)
+	queue := args[0]
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
 
 	f, err := ff.buildFilter()
 	if err != nil {
@@ -189,14 +193,14 @@ func runDLQRedrive(ctx context.Context, w io.Writer, tr Transport, args []string
 		fmt.Fprintln(os.Stderr, "Usage: rdq dlq redrive <queue> [--id ID]... [filter flags]")
 		fs.PrintDefaults()
 	}
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() < 1 {
+	if len(args) < 1 {
 		fs.Usage()
 		return fmt.Errorf("queue name required")
 	}
-	queue := fs.Arg(0)
+	queue := args[0]
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
 
 	sel, err := buildSelector([]string(ids), &ff)
 	if err != nil {
@@ -227,14 +231,14 @@ func runDLQPurge(ctx context.Context, w io.Writer, tr Transport, args []string) 
 		fmt.Fprintln(os.Stderr, "Usage: rdq dlq purge <queue> [--id ID]... [filter flags]")
 		fs.PrintDefaults()
 	}
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() < 1 {
+	if len(args) < 1 {
 		fs.Usage()
 		return fmt.Errorf("queue name required")
 	}
-	queue := fs.Arg(0)
+	queue := args[0]
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
 
 	sel, err := buildSelector([]string(ids), &ff)
 	if err != nil {
