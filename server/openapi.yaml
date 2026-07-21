@@ -1,0 +1,391 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# NORMATIVE ARTIFACT — this OpenAPI document is the authoritative rdq-server v1
+# HTTP contract (design 04). The handler code implements it; design 04 states
+# the semantics. When a handler and this spec disagree, this spec wins.
+#
+# Scope note: T5.1 ships the routing scaffolding, the problem+json error model,
+# and the health endpoints. The data plane (T5.2), DLQ/ops (T5.3) and admin
+# (T5.4) PATHS are specified here because the spec is normative and precedes the
+# handlers; their operations carry an `x-status: planned` marker until landed.
+openapi: 3.1.0
+
+info:
+  title: rdq-server API
+  version: "1.0.0"
+  description: >
+    REST intake, DLQ/ops, and admin surface for rdq — the reliable-delivery
+    queue. Bodies use the envelope model (design 01). Errors are RFC 9457
+    application/problem+json with a stable machine `code`. Liveness/readiness
+    endpoints sit outside `/v1` and its auth (G11).
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+
+servers:
+  - url: /
+    description: The server root. Health probes are at the root; the API is under /v1.
+
+tags:
+  - name: health
+    description: Liveness and readiness. Outside /v1 and its auth (design 04 §8, G11).
+  - name: data-plane
+    description: Submit and look up tasks (design 04 §1).
+  - name: dlq-ops
+    description: Dead-letter browse/redrive/purge, stats, pause/resume (design 04 §2).
+  - name: admin
+    description: Queue configuration CRUD (design 04 §3).
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: getHealthz
+      summary: Liveness probe
+      description: >
+        Reports only that the process is up and serving; never touches
+        dependencies. Requires no authentication.
+      security: []
+      responses:
+        "200":
+          description: The process is live.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusReport"
+              example: { status: ok }
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /readyz:
+    get:
+      tags: [health]
+      operationId: getReadyz
+      summary: Readiness probe
+      description: >
+        Ready only when every registered dependency probe passes; `/readyz`
+        reflects storage reachability so a rollout waits for a warm instance
+        (design 04 §8). Requires no authentication.
+      security: []
+      responses:
+        "200":
+          description: All dependencies reachable; the instance is ready to serve.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyReport"
+              example:
+                status: ready
+                checks: { storage: ok }
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "503":
+          description: A dependency (e.g. storage) is unreachable; not ready.
+          headers:
+            Retry-After:
+              $ref: "#/components/headers/RetryAfter"
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              example:
+                type: https://rdq.dev/problems/STORAGE_UNAVAILABLE
+                title: Storage Unavailable
+                status: 503
+                code: STORAGE_UNAVAILABLE
+                detail: one or more dependencies are not reachable
+                instance: /readyz
+
+  /v1/queues/{queue}/tasks:
+    post:
+      tags: [data-plane]
+      operationId: submitTask
+      summary: Submit a task (idempotent)
+      description: >
+        Enqueue a task. Resubmitting the same `id` to the same queue is an
+        idempotent no-op returning the existing envelope; the same `id` in a
+        different queue is rejected `409 ID_CONFLICT` (design 04 §1, G8).
+      x-status: planned
+      parameters:
+        - $ref: "#/components/parameters/Queue"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitTaskRequest"
+      responses:
+        "202":
+          description: Accepted; the full envelope is returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "404":
+          $ref: "#/components/responses/QueueNotFound"
+        "409":
+          $ref: "#/components/responses/IDConflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "422":
+          $ref: "#/components/responses/InvalidTask"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/StorageUnavailable"
+
+  /v1/tasks/{id}:
+    get:
+      tags: [data-plane]
+      operationId: getTask
+      summary: Look up a task by id
+      description: >
+        Returns the task in ANY status (PENDING/IN_FLIGHT/SUCCEEDED/DEAD). The
+        queue is resolved from the task row and the caller's grant on that queue
+        is enforced — there is no global read role (design 04 §5, OI-1).
+      x-status: planned
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The task's ULID.
+          schema: { type: string }
+      responses:
+        "200":
+          description: The task envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: No task with this id.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
+  /v1/queues/{queue}/stats:
+    get:
+      tags: [dlq-ops]
+      operationId: getQueueStats
+      summary: Per-queue operational snapshot
+      x-status: planned
+      parameters:
+        - $ref: "#/components/parameters/Queue"
+      responses:
+        "200":
+          description: Queue depth and age snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Stats"
+        "404":
+          $ref: "#/components/responses/QueueNotFound"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        Static bearer token mapped to a principal + per-queue×role grants
+        (design 04 §5). Enforcement lands in T5.6.
+
+  security:
+    - bearerAuth: []
+
+  parameters:
+    Queue:
+      name: queue
+      in: path
+      required: true
+      description: The configured queue name (never silently defaulted, design 03 §3).
+      schema: { type: string }
+
+  headers:
+    RetryAfter:
+      description: Whole seconds the client should wait before retrying.
+      schema:
+        type: integer
+        minimum: 1
+
+  schemas:
+    Problem:
+      type: object
+      description: >
+        RFC 9457 problem detail. `code` is the STABLE machine-readable contract
+        clients switch on; `type`/`title`/`status`/`detail`/`instance` are
+        human-facing.
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: URI identifying the problem class (https://rdq.dev/problems/{code}).
+        title:
+          type: string
+          description: Short, human-readable summary of the problem class.
+        status:
+          type: integer
+          description: HTTP status code, duplicated per RFC 9457 §3.1.
+        detail:
+          type: string
+          description: Human-readable explanation for this occurrence.
+        instance:
+          type: string
+          format: uri-reference
+          description: URI reference for this occurrence (the request path).
+        code:
+          $ref: "#/components/schemas/ProblemCode"
+
+    ProblemCode:
+      type: string
+      description: >
+        Stable machine-readable error code. These values are frozen once shipped
+        (design 04 §conventions) and MUST match the Go constants in
+        server/http/problem.go.
+      enum:
+        - NOT_FOUND
+        - METHOD_NOT_ALLOWED
+        - UNAUTHENTICATED
+        - FORBIDDEN
+        - QUEUE_NOT_FOUND
+        - ID_CONFLICT
+        - PAYLOAD_TOO_LARGE
+        - INVALID_TASK
+        - STALE_CURSOR
+        - CONFLICT
+        - RATE_LIMITED
+        - STORAGE_UNAVAILABLE
+        - INTERNAL
+
+    StatusReport:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          description: Coarse status token (e.g. "ok").
+
+    ReadyReport:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          description: '"ready" when all dependency probes pass.'
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+          description: Per-dependency result ("ok" or an error string).
+
+    SubmitTaskRequest:
+      type: object
+      required: [handler_ref, payload, payload_content_type]
+      properties:
+        id:
+          type: string
+          description: Client-supplied ULID for idempotent submit (optional).
+        handler_ref:
+          type: string
+          description: Logical handler the callback dispatch resolves.
+        payload:
+          type: string
+          format: byte
+          description: Base64-encoded raw payload bytes.
+        payload_content_type:
+          type: string
+          description: Media type of the decoded payload.
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: Metadata propagated to the callback as X-RDQ-* / trace headers.
+
+    Envelope:
+      type: object
+      description: >
+        The task envelope (design 01). Full schema is frozen in core/envelope;
+        this is the API projection. Detailed properties are refined in T5.2.
+      additionalProperties: true
+      properties:
+        id: { type: string }
+        queue: { type: string }
+        handler_ref: { type: string }
+        status:
+          type: string
+          enum: [PENDING, IN_FLIGHT, SUCCEEDED, DEAD]
+
+    Stats:
+      type: object
+      properties:
+        pending: { type: integer }
+        in_flight: { type: integer }
+        dlq_depth: { type: integer }
+        oldest_pending_age_ms: { type: integer }
+
+  responses:
+    MethodNotAllowed:
+      description: The path exists but not for this method.
+      headers:
+        Allow:
+          description: The methods this path accepts.
+          schema: { type: string }
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    QueueNotFound:
+      description: The queue is not configured (design 03 §3).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    IDConflict:
+      description: The task id already exists in a different queue (G8).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    PayloadTooLarge:
+      description: The payload exceeds the per-queue limit.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    InvalidTask:
+      description: The submit body is malformed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Forbidden:
+      description: Authenticated but lacking the required queue×role grant.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    RateLimited:
+      description: Shed under load; retry after the hint.
+      headers:
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    StorageUnavailable:
+      description: Storage is unreachable/degraded; safe to retry (idempotent submit).
+      headers:
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+
+security:
+  - bearerAuth: []
