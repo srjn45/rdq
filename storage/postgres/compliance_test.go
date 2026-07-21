@@ -130,7 +130,7 @@ func TestPostgresCompliance_KillMidClaim(t *testing.T) {
 
 	// Recovery worker's token resolves the task successfully.
 	live := envelope.Attempt{
-		AttemptNo: 1, StartedAt: now, FinishedAt: &now,
+		AttemptNo: r.Task.AttemptCount + 1, StartedAt: now, FinishedAt: &now,
 		Outcome: envelope.OutcomeRetryableFailure,
 		Error:   &envelope.Error{Type: "recovered", Message: "task recovered from kill-9"},
 	}
