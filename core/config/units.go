@@ -280,3 +280,26 @@ func (m StatusMatcher) MarshalJSON() ([]byte, error) {
 	}
 	return json.Marshal(m.Class)
 }
+
+// UnmarshalJSON accepts either an integer status code or a class string — the
+// same two forms as UnmarshalYAML and MarshalJSON — so the admin API can
+// round-trip response_mapping entries (design 03 §2).
+func (m *StatusMatcher) UnmarshalJSON(data []byte) error {
+	var code int
+	if err := json.Unmarshal(data, &code); err == nil {
+		if code < 100 || code > 599 {
+			return fmt.Errorf("invalid status code %d: must be 100..599", code)
+		}
+		m.Code, m.Class = code, ""
+		return nil
+	}
+	var class string
+	if err := json.Unmarshal(data, &class); err != nil {
+		return fmt.Errorf("status must be a code (408) or a class (\"5xx\")")
+	}
+	if err := validStatusClass(class); err != nil {
+		return err
+	}
+	m.Code, m.Class = 0, class
+	return nil
+}
