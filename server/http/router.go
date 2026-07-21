@@ -18,9 +18,10 @@ import "net/http"
 func (s *Server) buildHandler() http.Handler {
 	mux := http.NewServeMux()
 
-	// Outside the auth boundary — health probes.
+	// Outside the auth boundary — health probes and metrics scrape.
 	mux.HandleFunc("/healthz", only(http.MethodGet, s.handleHealthz))
 	mux.HandleFunc("/readyz", only(http.MethodGet, s.handleReadyz))
+	mux.HandleFunc("/metrics", only(http.MethodGet, s.handleMetrics))
 
 	// Inside the auth boundary — the versioned API.
 	mux.Handle("/v1/", http.StripPrefix("/v1", s.withAuth(s.v1Handler())))

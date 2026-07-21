@@ -24,6 +24,7 @@ type Server struct {
 	handler         http.Handler
 	storage         spi.Storage
 	maxPayloadBytes int64
+	metricsHandler  http.Handler // /metrics — set via WithMetricsHandler
 }
 
 // Option configures a Server at construction.
