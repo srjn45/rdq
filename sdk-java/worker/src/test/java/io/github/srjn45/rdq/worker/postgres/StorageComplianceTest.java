@@ -338,6 +338,53 @@ class StorageComplianceTest {
         assertThat(claimOne(s, queue, LONG_LEASE).task().id()).isEqualTo("t");
     }
 
+    // --- regression: LEASE_EXPIRED attempt_no after redrive -----------------
+
+    /**
+     * Regression for the LEASE_EXPIRED attempt_no collision: after a redrive
+     * (attempt_count=0, history 1..N preserved), a subsequent lease expiry on the
+     * redriven task must derive attempt_no from the history sequence (MAX+1), not
+     * from the budget counter (attempt_count+1=1), which would collide with the
+     * pre-redrive attempt_no=1 and cause a UNIQUE(task_id,attempt_no) violation
+     * that permanently wedges the task.
+     */
+    @Test
+    void redriveLeaseExpired_reclaim_noUniqueViolation() throws Exception {
+        final String queue = "q.redrive.lease";
+        Storage s = store();
+
+        // Drive the task through two attempts into the DLQ.
+        // History: attempt_no 1 (RETRYABLE_FAILURE), attempt_no 2 (PERMANENT_FAILURE).
+        s.enqueue(newPendingTask("rl", queue));
+        Claimed c = claimOne(s, queue, LONG_LEASE);
+        s.reschedule("rl", c.token(), retryAttempt(1, "e1"), Instant.now().minusSeconds(1));
+        c = claimOne(s, queue, LONG_LEASE);
+        s.deadLetter("rl", c.token(), retryAttempt(2, "e2"));
+
+        // Redrive: attempt_count resets to 0, history (attempt_no 1 and 2) preserved.
+        int n = s.redrive(queue, Selector.byIds(List.of("rl")));
+        assertThat(n).isEqualTo(1);
+
+        // Claim with a short lease that expires nearly immediately.
+        claimOne(s, queue, SHORT_LEASE);
+
+        // Wait past the lease window.
+        Thread.sleep(EXPIRE_WAIT_MS);
+
+        // Reclaim. Before the fix: attempt_count=0 → INSERT attempt_no=1 → UNIQUE
+        // violation → StorageException. After the fix: MAX(2)+1=3 → succeeds.
+        Claimed reclaimed = claimOne(s, queue, LONG_LEASE);
+
+        List<Attempt> history = reclaimed.task().attempts();
+        assertThat(history).as("history: 2 pre-redrive + 1 LEASE_EXPIRED").hasSize(3);
+
+        Attempt leaseExpired = history.get(2);
+        assertThat(leaseExpired.attemptNo())
+            .as("LEASE_EXPIRED attempt_no must be history-based (3), not budget-based (1)")
+            .isEqualTo(3);
+        assertThat(leaseExpired.outcome()).isEqualTo(Outcome.LEASE_EXPIRED);
+    }
+
     // --- invariant 8: stable pagination -------------------------------------
 
     @Test
