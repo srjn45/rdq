@@ -49,7 +49,18 @@ func (s *Store) Reschedule(ctx context.Context, id spi.TaskID, token spi.ClaimTo
 		if err != nil {
 			return err
 		}
-		return staleIfNoRows(res)
+		if err := staleIfNoRows(res); err != nil {
+			return err
+		}
+		// The task is PENDING again (due at nextAt); wake a WaitDue-blocked worker
+		// so it re-evaluates instead of waiting out its poll interval (Notify, T2.5).
+		// The queue is read from the just-updated row; the notify commits with the
+		// reschedule so a rolled-back outcome wakes nobody.
+		if _, err := tx.ExecContext(ctx,
+			`SELECT pg_notify($1, queue) FROM rdq_task WHERE id = $2`, dueChannel, id); err != nil {
+			return fmt.Errorf("rdq/postgres: reschedule notify: %w", err)
+		}
+		return nil
 	})
 }
 
