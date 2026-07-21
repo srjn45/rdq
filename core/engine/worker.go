@@ -445,11 +445,21 @@ func (w *Worker) process(q *queueState, c spi.Claimed) {
 		w.recorder.RecordHandlerDuration(q.spec.Queue, finished.Sub(started), err == nil)
 	}
 
-	attemptNo := task.AttemptCount + 1
+	// attempt_count is the retry BUDGET (a redrive resets it to 0 for a fresh
+	// max_attempts + backoff schedule), whereas a task's attempt_no is a per-task
+	// MONOTONIC history sequence under a UNIQUE(task_id, attempt_no) constraint.
+	// The two diverge after a redrive: the budget restarts at 1, but the history
+	// must continue past the preserved attempts — numbering a new attempt from the
+	// reset budget would collide with a retained attempt_no, the outcome write
+	// would fail, and the task would wedge IN_FLIGHT (T5.7 regression). Keep them
+	// separate: budgetNo drives the exhausted/backoff decisions, historyNo numbers
+	// the persisted attempt. With no prior redrive the two are equal.
+	budgetNo := task.AttemptCount + 1
+	historyNo := len(task.Attempts) + 1
 
 	if err == nil {
 		att := envelope.Attempt{
-			AttemptNo:  attemptNo,
+			AttemptNo:  historyNo,
 			StartedAt:  started,
 			FinishedAt: ptr(finished),
 			Outcome:    envelope.OutcomeSuccess,
@@ -460,7 +470,7 @@ func (w *Worker) process(q *queueState, c spi.Claimed) {
 			succeeded := task
 			succeeded.Status = envelope.StatusSucceeded
 			w.logger.Transition(ctx, rdqlog.TransitionSucceeded, succeeded,
-				slog.Int("attempt_no", attemptNo))
+				slog.Int("attempt_no", historyNo))
 		}
 		if w.recorder != nil && task.AttemptCount > 0 {
 			w.recorder.IncrSuccessAfterRetry(q.spec.Queue)
@@ -472,7 +482,7 @@ func (w *Worker) process(q *queueState, c spi.Claimed) {
 	errType := policy.ErrorType(err)
 	verdict := q.spec.Classifier.Classify(err, errType)
 	att := envelope.Attempt{
-		AttemptNo:  attemptNo,
+		AttemptNo:  historyNo,
 		StartedAt:  started,
 		FinishedAt: ptr(finished),
 		Outcome:    verdict.Decision.Outcome(),
@@ -482,7 +492,7 @@ func (w *Worker) process(q *queueState, c spi.Claimed) {
 		},
 	}
 
-	exhausted := attemptNo >= q.spec.MaxAttempts
+	exhausted := budgetNo >= q.spec.MaxAttempts
 	if verdict.Decision == policy.DecisionPermanent || exhausted {
 		if derr := w.store.DeadLetter(ctx, task.ID, token, att); derr != nil {
 			w.abandon(ctx, task, derr)
@@ -490,7 +500,7 @@ func (w *Worker) process(q *queueState, c spi.Claimed) {
 			dead := task
 			dead.Status = envelope.StatusDead
 			w.logger.Transition(ctx, rdqlog.TransitionDeadLettered, dead,
-				slog.Int("attempt_no", attemptNo),
+				slog.Int("attempt_no", historyNo),
 				slog.String(rdqlog.KeyErrorType, errType))
 		}
 		if w.recorder != nil {
@@ -502,7 +512,7 @@ func (w *Worker) process(q *queueState, c spi.Claimed) {
 	// Retryable and attempts remain: schedule the next attempt after the backoff
 	// delay. The delay argument is the retry index, which equals this attempt's
 	// number (attempt 1 failing schedules the 1st retry, delay = initial_backoff).
-	delay := q.spec.Backoff.Delay(attemptNo, w.rng)
+	delay := q.spec.Backoff.Delay(budgetNo, w.rng)
 	nextAt := finished.Add(delay)
 	if rerr := w.store.Reschedule(ctx, task.ID, token, att, nextAt); rerr != nil {
 		w.abandon(ctx, task, rerr)
@@ -511,7 +521,7 @@ func (w *Worker) process(q *queueState, c spi.Claimed) {
 		retried.Status = envelope.StatusPending
 		retried.NextAttemptAt = &nextAt
 		w.logger.Transition(ctx, rdqlog.TransitionRetried, retried,
-			slog.Int("attempt_no", attemptNo),
+			slog.Int("attempt_no", historyNo),
 			slog.String(rdqlog.KeyErrorType, errType),
 			slog.Time(rdqlog.KeyNextAttemptAt, nextAt))
 	}
@@ -592,7 +602,10 @@ func (w *Worker) startHeartbeat(hctx context.Context, cancel context.CancelFunc,
 func (w *Worker) deadLetter(ctx context.Context, q *queueState, task envelope.Envelope, token spi.ClaimToken, e *envelope.Error) {
 	now := w.clock.Now()
 	att := envelope.Attempt{
-		AttemptNo:  task.AttemptCount + 1,
+		// History sequence, not the retry budget: a poison-pill / routing
+		// dead-letter after a redrive must number past the preserved attempts to
+		// avoid a UNIQUE(task_id, attempt_no) collision (see process()).
+		AttemptNo:  len(task.Attempts) + 1,
 		StartedAt:  now,
 		FinishedAt: ptr(now),
 		Outcome:    envelope.OutcomePermanentFailure,

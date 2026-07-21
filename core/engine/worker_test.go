@@ -257,6 +257,79 @@ func TestSubmitExhaustDeadLetter(t *testing.T) {
 	}
 }
 
+// TestRedriveContinuesAttemptHistory pins the attempt-numbering split (the T5.7
+// regression): a redrive resets attempt_count (the retry BUDGET) to 0 but keeps
+// the attempt history (invariant 7), so a task re-run after a redrive must number
+// its new attempt PAST the preserved ones — attempt_no is a per-task monotonic
+// sequence under a UNIQUE(task_id, attempt_no) constraint in real storage.
+// Numbering it from the reset budget (attempt_count+1) would re-emit an existing
+// attempt_no and, against Postgres, fail the outcome write and wedge the task
+// IN_FLIGHT. Here we assert the engine records the *continued* history number
+// while the budget still resets (a fresh, non-exhausted attempt).
+func TestRedriveContinuesAttemptHistory(t *testing.T) {
+	clk := newWorkerClock()
+	store := memstore.New(memstore.WithClock(clk.Now))
+	reg := registry.New()
+
+	var mu sync.Mutex
+	failing := true
+	if err := reg.Register("h", &testHandler{fn: func(ctx context.Context, task envelope.Envelope) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if failing {
+			return errors.New("transient")
+		}
+		return nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	spec := baseSpec()
+	spec.MaxAttempts = 2
+	w := newTestWorker(t, store, reg, clk, []QueueSpec{spec})
+	cancel, done := runWorker(t, w)
+	defer func() { cancel(); <-done }()
+
+	// Drive the task to the DLQ: attempt 1 fails, attempt 2 exhausts → DEAD with
+	// attempts numbered 1 and 2.
+	submit(t, store, clk, "t1")
+	eventually(t, func() bool { return getTask(t, store, "t1").AttemptCount == 1 })
+	clk.advance(time.Second)
+	eventually(t, func() bool { return getTask(t, store, "t1").Status == envelope.StatusDead })
+	if got := getTask(t, store, "t1"); len(got.Attempts) != 2 {
+		t.Fatalf("pre-redrive attempts = %d, want 2", len(got.Attempts))
+	}
+
+	// Redrive resets the budget to 0 but keeps attempts 1 and 2, then let the
+	// handler succeed on the re-run.
+	mu.Lock()
+	failing = false
+	mu.Unlock()
+	if n, err := store.Redrive(context.Background(), testQueue, spi.Selector{IDs: []string{"t1"}}); err != nil || n != 1 {
+		t.Fatalf("Redrive = (%d, %v), want (1, nil)", n, err)
+	}
+
+	eventually(t, func() bool { return getTask(t, store, "t1").Status == envelope.StatusSucceeded })
+
+	got := getTask(t, store, "t1")
+	// Budget reset: a single successful attempt since the redrive.
+	if got.AttemptCount != 1 {
+		t.Errorf("post-redrive attempt_count = %d, want 1 (budget reset)", got.AttemptCount)
+	}
+	// History continued: the new attempt is numbered 3, not a duplicate 1.
+	if len(got.Attempts) != 3 {
+		t.Fatalf("total attempts = %d, want 3 (2 preserved + 1 new)", len(got.Attempts))
+	}
+	for i, want := range []int{1, 2, 3} {
+		if got.Attempts[i].AttemptNo != want {
+			t.Errorf("attempts[%d].attempt_no = %d, want %d (monotonic, no collision)", i, got.Attempts[i].AttemptNo, want)
+		}
+	}
+	if last := got.Attempts[2]; last.Outcome != envelope.OutcomeSuccess {
+		t.Errorf("final attempt outcome = %s, want SUCCESS", last.Outcome)
+	}
+}
+
 // TestPermanentFailureDeadLetters verifies the classification ladder short-circuits
 // retries: a permanently-classified error dead-letters on the first attempt.
 func TestPermanentFailureDeadLetters(t *testing.T) {
