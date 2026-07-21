@@ -145,6 +145,13 @@ func TestPostgresCompliance_KillMidClaim(t *testing.T) {
 // test); for single-connection tests prefer startPostgres.
 func startPostgresDSN(ctx context.Context, t *testing.T) string {
 	t.Helper()
+	// Escape hatch for environments without a container runtime (and for CI that
+	// prefers a service container): point tests at an already-running Postgres.
+	// The DSN's database is expected to be empty/disposable — tests migrate and
+	// mutate it freely.
+	if dsn := os.Getenv("RDQ_TEST_PG_DSN"); dsn != "" {
+		return dsn
+	}
 	if os.Getenv("RDQ_SKIP_DOCKER") != "" {
 		t.Skip("RDQ_SKIP_DOCKER set; skipping testcontainers Postgres test")
 	}
