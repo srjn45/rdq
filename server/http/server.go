@@ -12,6 +12,7 @@ package http
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/srjn45/rdq/core/spi"
 )
@@ -24,7 +25,8 @@ type Server struct {
 	handler         http.Handler
 	storage         spi.Storage
 	maxPayloadBytes int64
-	metricsHandler  http.Handler // /metrics — set via WithMetricsHandler
+	metricsHandler  http.Handler // /metrics — set via WithMetricsHandler (T6.1)
+	paused          sync.Map     // set[queue] → struct{}; managed by pause/resume (ops.go)
 }
 
 // Option configures a Server at construction.
