@@ -3,6 +3,7 @@ go 1.26
 use (
 	./cli
 	./core
+	./integration
 	./sdk-go
 	./server
 	./storage/postgres

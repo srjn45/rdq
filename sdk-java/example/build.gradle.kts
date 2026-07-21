@@ -1,24 +1,34 @@
-// rdq-java-example — runnable consumer example for the Java SDK (T7.6).
+// rdq-java-example — runnable consumer example + T8.2 cross-language runner.
 //
-// All code lives in test sources: no main classes → JaCoCo coverage gate is vacuous.
-// The test is skipped automatically when Docker is unavailable via
-// @Testcontainers(disabledWithoutDocker = true), matching the pattern used by
-// the worker compliance suite and WorkerIntegrationTest.
+// Main sources hold CrossLangWorkerRunner (a thin direct-SPI subprocess used by
+// the Go cross-language e2e test to prove Java can claim and complete a task
+// from a shared Postgres).  Test sources hold RetryExampleTest (the T7.6 JUnit
+// quickstart).  Neither contributes to the JaCoCo coverage gate.
+
+plugins {
+    application
+}
 
 base {
     archivesName.set("rdq-java-example")
 }
 
-dependencies {
-    testImplementation(project(":worker"))
+application {
+    mainClass.set("io.github.srjn45.rdq.example.CrossLangWorkerRunner")
+}
 
+dependencies {
+    // Main sources: runner needs the worker + JDBC driver.
+    implementation(project(":worker"))
+    implementation(libs.postgresql)
+    runtimeOnly(libs.slf4j.simple)
+
+    // Test sources: JUnit quickstart.
+    testImplementation(project(":worker"))
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.assertj)
     testImplementation(libs.testcontainers.postgresql)
     testImplementation(libs.testcontainers.junit)
-
-    // PostgreSQL JDBC driver: needed for PGSimpleDataSource in the test harness.
-    // project(":worker") exposes the driver only at runtime, not compile-time.
     testImplementation(libs.postgresql)
 
     testCompileOnly(libs.spotbugs.annotations)
