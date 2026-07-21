@@ -30,22 +30,8 @@ import (
 	"github.com/srjn45/rdq/core/spi"
 )
 
-// --- SHARED with T2.3 (claim.go): de-duplicate at integration, keep ONE copy. ---
-// Both T2.3 (claim + fencing) and T2.4 (this file) add methods to *Store, so each
-// branch must declare the type to compile standalone. The declaration below is
-// agreed identical across both branches; the integrator drops the duplicate.
-
-// Store is the PostgreSQL spi.Storage backend. Construct with New.
-type Store struct {
-	db *sql.DB
-}
-
-// New returns a Store backed by db. The caller owns db's lifecycle.
-func New(db *sql.DB) *Store {
-	return &Store{db: db}
-}
-
-// --- end SHARED block ---
+// The Store type and its New constructor are declared in claim.go (T2.3); this
+// file only adds the DLQ/ops methods to it.
 
 // defaultDLQPageLimit is the DLQList page size when Page.Limit is zero or
 // negative (mirrors memstore.defaultPageLimit).
