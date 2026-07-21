@@ -566,7 +566,9 @@ public final class PostgresStorage implements Storage {
             return 0;
         }
         SelectorClause clause = selectorClause(queue, selector);
-        String sql = REDRIVE_SQL_HEAD + clause.where + REDRIVE_SQL_TAIL;
+        // A space between HEAD's trailing `WHERE` (text blocks strip trailing
+        // whitespace) and the clause keeps the keyword separated.
+        String sql = REDRIVE_SQL_HEAD + " " + clause.where + REDRIVE_SQL_TAIL;
         return inTransaction(conn -> {
             int n = 0;
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -604,7 +606,7 @@ public final class PostgresStorage implements Storage {
             return 0;
         }
         SelectorClause clause = selectorClause(queue, selector);
-        String sql = PURGE_SQL_HEAD + clause.where + PURGE_SQL_TAIL;
+        String sql = PURGE_SQL_HEAD + " " + clause.where + PURGE_SQL_TAIL;
         return inTransaction(conn -> {
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 bindSelector(conn, ps, clause);

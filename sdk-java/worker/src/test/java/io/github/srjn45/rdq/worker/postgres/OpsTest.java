@@ -98,11 +98,13 @@ class OpsTest {
     @Test
     void stats_countsPendingInFlightAndDlqDepth() {
         Storage s = store();
-        s.enqueue(pending("p1", "q.stats"));
-        s.enqueue(pending("p2", "q.stats"));
+        // Build the state so each claim has exactly one claimable task (claimDue
+        // hands out the oldest due task, so the order matters).
+        driveToDlq(s, "d1", "q.stats", "boom"); // 1 dead
         s.enqueue(pending("f1", "q.stats"));
-        claimOne(s, "q.stats"); // one becomes IN_FLIGHT
-        driveToDlq(s, "d1", "q.stats", "boom");
+        claimOne(s, "q.stats"); // f1 is the only claimable task → IN_FLIGHT
+        s.enqueue(pending("p1", "q.stats"));
+        s.enqueue(pending("p2", "q.stats")); // 2 pending
 
         Stats stats = s.stats("q.stats");
         assertThat(stats.pending()).isEqualTo(2);
