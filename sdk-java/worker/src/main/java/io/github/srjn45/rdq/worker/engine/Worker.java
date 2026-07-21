@@ -216,10 +216,18 @@ public final class Worker {
         Envelope task = c.task();
         ClaimToken token = c.token();
 
+        // budgetNo tracks the attempt budget counter (resets after redrive);
+        // historyNo is the next position in the monotonic rdq_attempt history
+        // sequence — computed from attempts().size() to avoid a
+        // UNIQUE(task_id,attempt_no) collision when attempt_count was reset by
+        // a redrive while history rows are preserved (T5.7-class fix).
+        int budgetNo  = task.attemptCount() + 1;
+        int historyNo = (task.attempts() != null ? task.attempts().size() : 0) + 1;
+
         // Poison-pill guard: a task at max_attempts is dead-lettered without a run.
         if (task.attemptCount() >= q.spec.maxAttempts()) {
             Instant now = Instant.now();
-            Attempt att = attempt(task.attemptCount() + 1, now, now,
+            Attempt att = attempt(historyNo, now, now,
                 Outcome.PERMANENT_FAILURE, ERROR_TYPE_MAX_ATTEMPTS,
                 "max_attempts (" + q.spec.maxAttempts() + ") reached without a successful attempt");
             safeDeadLetter(task, token, att);
@@ -230,7 +238,7 @@ public final class Worker {
         HandlerRegistry.Resolution res = registry.resolve(task, q.spec.versionPolicy());
         if (res.action() == HandlerRegistry.Action.DEAD_LETTER) {
             Instant now = Instant.now();
-            Attempt att = attempt(task.attemptCount() + 1, now, now,
+            Attempt att = attempt(historyNo, now, now,
                 Outcome.PERMANENT_FAILURE, res.errorType(), res.errorMessage());
             safeDeadLetter(task, token, att);
             return;
@@ -239,10 +247,9 @@ public final class Worker {
         Instant started = Instant.now();
         Exception handlerError = invokeHandler(q, task, token, res.handler());
         Instant finished = Instant.now();
-        int attemptNo = task.attemptCount() + 1;
 
         if (handlerError == null) {
-            Attempt att = attempt(attemptNo, started, finished, Outcome.SUCCESS, null, null);
+            Attempt att = attempt(historyNo, started, finished, Outcome.SUCCESS, null, null);
             try {
                 store.complete(task.id(), token, att);
             } catch (Exception e) {
@@ -254,14 +261,14 @@ public final class Worker {
         // Failure path: classify, then reschedule or dead-letter
         String errType = Classifier.errorType(handlerError);
         Verdict verdict = q.spec.classifier().classify(handlerError, errType);
-        Attempt att = attempt(attemptNo, started, finished,
+        Attempt att = attempt(historyNo, started, finished,
             verdict.decision().toOutcome(), errType, handlerError.getMessage());
 
-        boolean exhausted = attemptNo >= q.spec.maxAttempts();
+        boolean exhausted = budgetNo >= q.spec.maxAttempts();
         if (verdict.decision() == Decision.PERMANENT || exhausted) {
             safeDeadLetter(task, token, att);
         } else {
-            Instant nextAt = finished.plus(q.spec.backoff().delay(attemptNo, rng::nextDouble));
+            Instant nextAt = finished.plus(q.spec.backoff().delay(budgetNo, rng::nextDouble));
             try {
                 store.reschedule(task.id(), token, att, nextAt);
             } catch (Exception e) {
