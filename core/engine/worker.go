@@ -12,6 +12,7 @@ import (
 
 	"github.com/srjn45/rdq/core/config"
 	"github.com/srjn45/rdq/core/envelope"
+	"github.com/srjn45/rdq/core/metrics"
 	"github.com/srjn45/rdq/core/policy"
 	"github.com/srjn45/rdq/core/registry"
 	"github.com/srjn45/rdq/core/spi"
@@ -167,6 +168,10 @@ type Worker struct {
 	// observability and tests; nil disables it.
 	abandonHook func(task envelope.Envelope, err error)
 
+	// recorder, if non-nil, receives claim-latency, handler-duration, and
+	// counter events. Nil means no metrics are emitted.
+	recorder metrics.Recorder
+
 	// handlers tracks in-flight handler goroutines so Run can drain them on stop.
 	// loops tracks the claim loops and the sweeper.
 	handlers sync.WaitGroup
@@ -214,6 +219,18 @@ func WithSweepJitter(f float64) Option {
 // the hook is purely for observation.
 func WithAbandonHook(fn func(task envelope.Envelope, err error)) Option {
 	return func(w *Worker) { w.abandonHook = fn }
+}
+
+// WithRecorder installs a metrics.Recorder that receives claim-latency
+// observations, handler-duration observations, and per-event counters
+// (retries, success-after-retry, DLQ arrivals). Pass metrics.Noop{} to
+// register the option without emitting anything.
+func WithRecorder(r metrics.Recorder) Option {
+	return func(w *Worker) {
+		if r != nil {
+			w.recorder = r
+		}
+	}
 }
 
 // NewWorker builds a worker for the given queues. store and reg are required; each
@@ -344,7 +361,11 @@ func (w *Worker) pollOnce(ctx context.Context, q *queueState) {
 		return
 	}
 
+	claimStart := w.clock.Now()
 	claimed, err := w.store.ClaimDue(ctx, q.spec.Queue, limit, q.spec.Lease)
+	if w.recorder != nil {
+		w.recorder.RecordClaimLatency(q.spec.Queue, w.clock.Now().Sub(claimStart))
+	}
 	if err != nil {
 		return
 	}
@@ -400,6 +421,10 @@ func (w *Worker) process(q *queueState, c spi.Claimed) {
 	err := w.runHandler(q, res.Handler, task, token)
 	finished := w.clock.Now()
 
+	if w.recorder != nil {
+		w.recorder.RecordHandlerDuration(q.spec.Queue, finished.Sub(started), err == nil)
+	}
+
 	attemptNo := task.AttemptCount + 1
 
 	if err == nil {
@@ -411,6 +436,9 @@ func (w *Worker) process(q *queueState, c spi.Claimed) {
 		}
 		if cerr := w.store.Complete(ctx, task.ID, token, att); cerr != nil {
 			w.abandon(task, cerr)
+		}
+		if w.recorder != nil && task.AttemptCount > 0 {
+			w.recorder.IncrSuccessAfterRetry(q.spec.Queue)
 		}
 		return
 	}
@@ -434,6 +462,9 @@ func (w *Worker) process(q *queueState, c spi.Claimed) {
 		if derr := w.store.DeadLetter(ctx, task.ID, token, att); derr != nil {
 			w.abandon(task, derr)
 		}
+		if w.recorder != nil {
+			w.recorder.IncrDLQArrival(q.spec.Queue)
+		}
 		return
 	}
 
@@ -444,6 +475,9 @@ func (w *Worker) process(q *queueState, c spi.Claimed) {
 	nextAt := finished.Add(delay)
 	if rerr := w.store.Reschedule(ctx, task.ID, token, att, nextAt); rerr != nil {
 		w.abandon(task, rerr)
+	}
+	if w.recorder != nil {
+		w.recorder.IncrRetry(q.spec.Queue)
 	}
 }
 
@@ -523,6 +557,9 @@ func (w *Worker) deadLetter(ctx context.Context, q *queueState, task envelope.En
 	}
 	if err := w.store.DeadLetter(ctx, task.ID, token, att); err != nil {
 		w.abandon(task, err)
+	}
+	if w.recorder != nil {
+		w.recorder.IncrDLQArrival(q.spec.Queue)
 	}
 }
 
