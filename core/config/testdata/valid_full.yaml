@@ -1,0 +1,49 @@
+config_version: 1
+
+defaults:
+  retry:
+    max_attempts: 5
+    initial_backoff: 1s
+    backoff_multiplier: 2.0
+    max_backoff: 10m
+    jitter: 0.2
+  execution:
+    lease: 60s
+    handler_timeout: 45s
+    heartbeat: false
+  limits:
+    max_payload_size: 1MiB
+    ttl_succeeded: 24h
+  worker:
+    batch_size: 32
+    poll_interval: 500ms
+    concurrency: 8
+    rate_limit: 100/s
+
+queues:
+  payments.charge:
+    retry:
+      max_attempts: 8
+      initial_backoff: 2s
+    classification:
+      retryable: ["java.net.*", "TIMEOUT"]
+      permanent: ["*.ValidationException"]
+    handler:
+      version_mismatch: dead-letter
+    sync_retry:
+      attempts: 2
+      backoff: 100ms
+    callback:
+      protocol: http
+      url: https://payments.internal/rdq/charge
+      timeout: 30s
+      auth:
+        type: bearer
+        secret_ref: env:PAYMENTS_CB_TOKEN
+      response_mapping:
+        retryable_status: [408, 429, "5xx"]
+        permanent_status: ["4xx"]
+
+  reports.nightly:
+    execution:
+      heartbeat: true

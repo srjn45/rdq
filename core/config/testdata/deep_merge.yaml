@@ -1,0 +1,22 @@
+config_version: 1
+
+# OI-3 example (design 03 §6): a queue that sets one field of a block inherits
+# the rest of that block from defaults, rather than replacing the block.
+defaults:
+  retry:
+    max_attempts: 5
+    initial_backoff: 1s
+    jitter: 0.2
+  execution:
+    lease: 60s
+    handler_timeout: 45s
+
+queues:
+  # Overrides only retry.max_attempts; still inherits initial_backoff and jitter
+  # from defaults.retry, and the whole execution block.
+  orders.settle:
+    retry:
+      max_attempts: 8
+
+  # Sets no overrides at all: inherits every default block wholesale.
+  orders.notify: {}
