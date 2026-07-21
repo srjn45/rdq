@@ -9,6 +9,11 @@ base {
 }
 
 dependencies {
+    // Jackson is exposed on the public API: the envelope model surfaces
+    // com.fasterxml.jackson.databind.JsonNode for error.detail and preserved
+    // unknown fields, so it must be an `api` dependency, not `implementation`.
+    api(libs.jackson.databind)
+
     implementation(libs.slf4j)
 
     testImplementation(libs.junit.jupiter)
