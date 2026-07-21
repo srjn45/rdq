@@ -45,12 +45,16 @@ func (s *Server) v1Handler() http.Handler {
 	return mux
 }
 
-// withAuth marks the /v1 authentication boundary (design 04 §5). It is a
-// pass-through today; T5.6 replaces the body with static-token authN plus
-// per-queue×role authZ, emitting UNAUTHENTICATED/FORBIDDEN problems. Keeping the
-// seam here guarantees no /v1 route is ever mounted outside auth.
+// withAuth marks the /v1 authentication boundary (design 04 §5). With an
+// Authorizer configured (WithAuthorizer, T5.6) it enforces static-token authN
+// plus per-queue×role authZ, emitting UNAUTHENTICATED/FORBIDDEN problems; with
+// none it stays a pass-through so the boundary is opt-in (dev/embedded mode).
+// Keeping the seam here guarantees no /v1 route is ever mounted outside auth.
 func (s *Server) withAuth(next http.Handler) http.Handler {
-	return next // TODO(T5.6): resolve principal + enforce grants.
+	if s.authz == nil {
+		return next
+	}
+	return s.authMiddleware(next)
 }
 
 // only restricts a handler to a single HTTP method, emitting a problem+json 405

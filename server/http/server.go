@@ -16,6 +16,7 @@ import (
 
 	rdqlog "github.com/srjn45/rdq/core/log"
 	"github.com/srjn45/rdq/core/spi"
+	"github.com/srjn45/rdq/server/auth"
 	srvconfig "github.com/srjn45/rdq/server/config"
 )
 
@@ -26,7 +27,8 @@ type Server struct {
 	probes          []namedProbe
 	handler         http.Handler
 	storage         spi.Storage
-	configStore     srvconfig.Store // T5.4: queue config CRUD + pause persistence
+	configStore     srvconfig.Store  // T5.4: queue config CRUD + pause persistence
+	authz           *auth.Authorizer // T5.6: /v1 authN/Z; nil ⇒ open boundary (dev/embedded)
 	maxPayloadBytes int64
 	metricsHandler  http.Handler   // /metrics — set via WithMetricsHandler (T6.1)
 	logger          *rdqlog.Logger // structured request/transition logger (T6.2)
@@ -55,6 +57,14 @@ func WithStorage(st spi.Storage) Option {
 // When set, pause/resume state is persisted there and IsPaused reads from it.
 func WithConfigStore(cs srvconfig.Store) Option {
 	return func(s *Server) { s.configStore = cs }
+}
+
+// WithAuthorizer enables the /v1 authN/Z boundary (T5.6, design 04 §5). When
+// set, every /v1 request must carry a valid bearer token and hold the
+// per-queue×role grant its operation requires; when unset, withAuth stays a
+// pass-through (dev/embedded mode) so the boundary is opt-in.
+func WithAuthorizer(a *auth.Authorizer) Option {
+	return func(s *Server) { s.authz = a }
 }
 
 // WithMaxPayloadBytes overrides the server-wide decoded-payload ceiling (default
