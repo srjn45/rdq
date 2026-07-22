@@ -5,6 +5,9 @@ package http
 import (
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/srjn45/rdq/core/audit"
 )
 
 // mountOps registers the queue pause/resume routes under /admin/queues/.
@@ -47,18 +50,29 @@ func (s *Server) handleAdminQueueAction(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	principal := principalName(r.Context())
 	switch action {
 	case "pause":
 		s.paused.Store(queue, struct{}{})
 		if s.configStore != nil {
 			_ = s.configStore.SetPaused(queue, true)
 		}
+		_ = s.audit().Emit(audit.Record{
+			Timestamp: time.Now().UTC(), Principal: principal,
+			Action: audit.ActionPause, Queue: queue, Count: -1,
+			Outcome: audit.OutcomeSuccess,
+		})
 		w.WriteHeader(http.StatusNoContent)
 	case "resume":
 		s.paused.Delete(queue)
 		if s.configStore != nil {
 			_ = s.configStore.SetPaused(queue, false)
 		}
+		_ = s.audit().Emit(audit.Record{
+			Timestamp: time.Now().UTC(), Principal: principal,
+			Action: audit.ActionResume, Queue: queue, Count: -1,
+			Outcome: audit.OutcomeSuccess,
+		})
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

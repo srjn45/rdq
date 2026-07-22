@@ -24,7 +24,8 @@ import (
 // contract — the Java Postgres binding (T7.4) tracks the same number.
 //
 // v1 → v2: added rdq_queue_config (ConfigStore, T5.4, design 04 §3).
-const SchemaVersion = 2
+// v2 → v3: added rdq_audit (audit log, T6.3, design 06).
+const SchemaVersion = 3
 
 // migrationLedger is the runner's bookkeeping table: which migration files have
 // been applied. It is distinct from rdq_schema_version (the startup gate) —

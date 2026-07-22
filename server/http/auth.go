@@ -3,6 +3,7 @@
 package http
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -10,6 +11,19 @@ import (
 	"github.com/srjn45/rdq/core/spi"
 	"github.com/srjn45/rdq/server/auth"
 )
+
+// principalKey is the context key under which an authenticated *auth.Principal
+// is stored by authMiddleware. Use principalName(ctx) to retrieve it.
+type principalKey struct{}
+
+// principalName returns the authenticated caller's name from ctx, or
+// "anonymous" when auth is disabled (no Authorizer) or the value is absent.
+func principalName(ctx context.Context) string {
+	if p, ok := ctx.Value(principalKey{}).(*auth.Principal); ok && p != nil {
+		return p.Name
+	}
+	return "anonymous"
+}
 
 // authMiddleware enforces the /v1 auth boundary (design 04 §5) when an
 // Authorizer is configured. It runs after StripPrefix, so r.URL.Path is already
@@ -31,6 +45,9 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		op, matched := classifyAuthOp(r.Method, r.URL.Path)
 		if !matched {
+			// Store the principal even for unknown routes so any handler that
+			// happens to call principalName() gets the right value.
+			r = r.WithContext(context.WithValue(r.Context(), principalKey{}, principal))
 			next.ServeHTTP(w, r) // unknown route/method → mux emits 404/405
 			return
 		}
@@ -45,6 +62,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				WithDetail("principal "+principal.Name+" lacks "+op.role.String()+" on this queue"))
 			return
 		}
+		r = r.WithContext(context.WithValue(r.Context(), principalKey{}, principal))
 		next.ServeHTTP(w, r)
 	})
 }
