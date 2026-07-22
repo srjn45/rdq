@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 /*
  * Copyright 2025-2026 Srajan Pathak
  *
@@ -193,12 +194,13 @@ class WorkerIntegrationTest {
         workerThread.setDaemon(true);
         workerThread.start();
 
-        // Poll the store until the task is DEAD or timeout
+        // Poll until the task is DEAD and full attempt history is visible (same
+        // visibility race as RetryExampleTest — DEAD commit can precede history row)
         Instant deadline = Instant.now().plusSeconds(15);
         Envelope task = null;
         while (Instant.now().isBefore(deadline)) {
             task = store.get("dlq-task");
-            if (task.status() == Status.DEAD) break;
+            if (task.status() == Status.DEAD && task.attempts().size() >= maxAttempts) break;
             Thread.sleep(50);
         }
 
@@ -243,11 +245,13 @@ class WorkerIntegrationTest {
         workerThread.setDaemon(true);
         workerThread.start();
 
+        // Wait for DEAD and attempt history visible (same visibility race — DEAD
+        // commit can precede the attempt row, causing attempts.get(0) to throw)
         Instant deadline = Instant.now().plusSeconds(10);
         Envelope task = null;
         while (Instant.now().isBefore(deadline)) {
             task = store.get("unroutable-task");
-            if (task.status() == Status.DEAD) break;
+            if (task.status() == Status.DEAD && task.attempts().size() >= 1) break;
             Thread.sleep(50);
         }
 

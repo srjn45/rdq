@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 /*
  * Copyright 2025-2026 Srajan Pathak
  *
@@ -186,10 +187,12 @@ class RetryExampleTest {
         workerThread.setDaemon(true);
         workerThread.start();
 
-        // ── 6. Wait until the task reaches DEAD status ─────────────────────────
+        // ── 6. Wait until the task reaches DEAD status AND full history is visible
+        //   (guarding the visibility race where DEAD is committed a hair before the
+        //   final attempt-history row, which would cause attempts.hasSize to read short)
         Instant deadline = Instant.now().plusSeconds(30);
         Envelope result = store.get(taskId);
-        while (Instant.now().isBefore(deadline) && result.status() != Status.DEAD) {
+        while (Instant.now().isBefore(deadline) && (result.status() != Status.DEAD || result.attempts().size() < maxAttempts)) {
             Thread.sleep(50);
             result = store.get(taskId);
         }

@@ -1,0 +1,16 @@
+{{- /* SPDX-License-Identifier: Apache-2.0 */ -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rdq-server.fullname" . }}
+  labels:
+    {{- include "rdq-server.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "rdq-server.selectorLabels" . | nindent 4 }}
