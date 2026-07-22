@@ -1,0 +1,76 @@
+name: Publish to Maven Central
+
+# OPERATOR-RUN ONLY — this workflow NEVER triggers on push or pull_request.
+# Before running: ensure T0.2 (io.github.srjn45 Sonatype namespace) is
+# registered, the signing key exists in repository secrets, and the target
+# git tag has been created per RELEASING.md.
+#
+# Secrets required in this repository:
+#   MAVEN_CENTRAL_USERNAME  — Sonatype OSSRH username
+#   MAVEN_CENTRAL_PASSWORD  — Sonatype OSSRH password (or token)
+#   MAVEN_SIGNING_KEY       — ASCII-armored GPG private key (gradle needs this)
+#   MAVEN_SIGNING_PASSWORD  — passphrase for the GPG key
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g. 2.1.0). Must match sdk-java group version."
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run — build + sign but do NOT upload to Sonatype"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  publish:
+    name: Publish io.github.srjn45:rdq-client + rdq-worker
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk-java
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Grant execute permission for Gradle wrapper
+        run: chmod +x gradlew
+
+      - name: Verify version matches build
+        run: |
+          BUILD_VERSION=$(./gradlew :client:properties -q | grep "^version:" | awk '{print $2}')
+          if [ "$BUILD_VERSION" != "${{ inputs.version }}" ]; then
+            echo "ERROR: build version $BUILD_VERSION != requested ${{ inputs.version }}"
+            exit 1
+          fi
+          echo "Version check passed: $BUILD_VERSION"
+
+      - name: Build, test, and sign artifacts
+        env:
+          MAVEN_SIGNING_KEY: ${{ secrets.MAVEN_SIGNING_KEY }}
+          MAVEN_SIGNING_PASSWORD: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
+        run: ./gradlew :client:build :worker:build
+
+      - name: Publish to Maven Central
+        if: ${{ inputs.dry_run == 'false' }}
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_SIGNING_KEY: ${{ secrets.MAVEN_SIGNING_KEY }}
+          MAVEN_SIGNING_PASSWORD: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
+        run: ./gradlew :client:publishMavenJavaPublicationToMavenCentralRepository :worker:publishMavenJavaPublicationToMavenCentralRepository
+
+      - name: Dry-run summary
+        if: ${{ inputs.dry_run == 'true' }}
+        run: echo "Dry run complete — artifacts built and signed but NOT uploaded to Sonatype."

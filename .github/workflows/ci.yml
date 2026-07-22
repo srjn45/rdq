@@ -47,6 +47,8 @@ jobs:
 
       - name: Run tests
         run: ./gradlew clean test jacocoTestReport jacocoTestCoverageVerification
+        # NOTE: no publish task runs here. Publishing is manual-only via
+        # .github/workflows/publish.yml (workflow_dispatch, operator-run).
 
   go:
     runs-on: ubuntu-latest
@@ -66,3 +68,39 @@ jobs:
             echo "--- $mod"
             (cd "$mod" && go vet ./... && go build ./... && go test ./...)
           done
+
+  docker:
+    name: Docker build (no push)
+    runs-on: ubuntu-latest
+    needs: go
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build rdq-server image
+        run: docker build -t rdq-server:ci .
+
+  cli-release-build:
+    name: CLI cross-compile (no publish)
+    runs-on: ubuntu-latest
+    needs: go
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          install-only: true
+          version: latest
+
+      - name: Build CLI snapshot binaries
+        # --snapshot: no git tag required; --skip=publish: no upload.
+        run: goreleaser build --snapshot --clean --config .goreleaser.yaml

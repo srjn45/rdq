@@ -6,6 +6,8 @@ import com.github.spotbugs.snom.SpotBugsTask
 plugins {
     id("com.diffplug.spotless") version "6.23.0" apply false
     id("com.github.spotbugs") version "6.1.11" apply false
+    // maven-publish and signing are core Gradle plugins applied directly in
+    // :client and :worker (not :example, which is not published).
 }
 
 subprojects {

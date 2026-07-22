@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: Apache-2.0
+# Default values for rdq-server. Override per environment.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/srjn45/rdq-server
+  pullPolicy: IfNotPresent
+  # Overrides the chart appVersion when set.
+  tag: ""
+
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# Environment variables injected into rdq-server pods.
+# RDQ_DSN must be set (required); use a secretRef in production.
+env:
+  RDQ_ADDR: ":8080"
+
+# Supply the Postgres DSN via a Kubernetes secret.
+# Create:  kubectl create secret generic rdq-dsn --from-literal=dsn='postgres://...'
+dsnSecretRef:
+  name: rdq-dsn
+  key: dsn
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  failureThreshold: 3
+
+podAnnotations: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]

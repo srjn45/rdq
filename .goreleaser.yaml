@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: Apache-2.0
+# GoReleaser configuration for the rdq CLI binary.
+# CI runs: goreleaser build --snapshot --clean   (build only, no publish).
+# A human operator runs: goreleaser release       (tag-triggered, approval-gated).
+# See RELEASING.md for the full tag + publish procedure.
+
+version: 2
+
+project_name: rdq
+
+before:
+  hooks:
+    - go work sync
+
+builds:
+  - id: rdq
+    dir: cli
+    binary: rdq
+    main: .
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+archives:
+  - id: rdq
+    ids: [rdq]
+    name_template: "rdq_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ .Tag }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
