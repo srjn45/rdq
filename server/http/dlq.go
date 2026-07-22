@@ -6,10 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/srjn45/rdq/core/audit"
 	"github.com/srjn45/rdq/core/envelope"
 	"github.com/srjn45/rdq/core/spi"
 )
@@ -110,22 +113,23 @@ func (s *Server) handleDLQList(w http.ResponseWriter, r *http.Request) {
 
 // handleRedrive serves POST /queues/{queue}/dlq:redrive.
 func (s *Server) handleRedrive(w http.ResponseWriter, r *http.Request) {
-	s.handleDLQMutate(w, r, func(ctx context.Context, queue string, sel spi.Selector) (int, error) {
+	s.handleDLQMutate(w, r, audit.ActionRedrive, func(ctx context.Context, queue string, sel spi.Selector) (int, error) {
 		return s.storage.Redrive(ctx, queue, sel)
 	})
 }
 
 // handlePurge serves POST /queues/{queue}/dlq:purge.
 func (s *Server) handlePurge(w http.ResponseWriter, r *http.Request) {
-	s.handleDLQMutate(w, r, func(ctx context.Context, queue string, sel spi.Selector) (int, error) {
+	s.handleDLQMutate(w, r, audit.ActionPurge, func(ctx context.Context, queue string, sel spi.Selector) (int, error) {
 		return s.storage.Purge(ctx, queue, sel)
 	})
 }
 
 // handleDLQMutate is the shared body for redrive and purge: decode the
 // selector, apply filter-streaming when the backend lacks FilterPushdown
-// (design 04 §2, SPI OI-2), call op, return { count }.
-func (s *Server) handleDLQMutate(w http.ResponseWriter, r *http.Request, op func(context.Context, string, spi.Selector) (int, error)) {
+// (design 04 §2, SPI OI-2), call op, return { count }. It emits an audit
+// record through s.audit() on both success and failure.
+func (s *Server) handleDLQMutate(w http.ResponseWriter, r *http.Request, action audit.Action, op func(context.Context, string, spi.Selector) (int, error)) {
 	if s.storage == nil {
 		Error(w, r, CodeStorageUnavailable, WithDetail("storage not configured"))
 		return
@@ -143,6 +147,8 @@ func (s *Server) handleDLQMutate(w http.ResponseWriter, r *http.Request, op func
 	}
 
 	sel := spi.Selector{IDs: req.IDs, Filter: req.Filter}
+	selDesc := selectorDescription(req)
+	principal := principalName(r.Context())
 
 	// Filter-streaming: back-fill IDs from DLQList pages when the backend
 	// lacks native FilterPushdown. Entries dead-lettered mid-stream are not
@@ -150,6 +156,11 @@ func (s *Server) handleDLQMutate(w http.ResponseWriter, r *http.Request, op func
 	if sel.Filter != nil && !s.storage.Capabilities().FilterPushdown {
 		ids, err := s.collectByFilter(r.Context(), queue, *sel.Filter)
 		if err != nil {
+			_ = s.audit().Emit(audit.Record{
+				Timestamp: time.Now().UTC(), Principal: principal,
+				Action: action, Queue: queue, Selector: selDesc,
+				Count: -1, Outcome: audit.OutcomeFailure, ErrorMessage: err.Error(),
+			})
 			Error(w, r, CodeInternal, WithDetail("dlq scan: "+err.Error()))
 			return
 		}
@@ -158,10 +169,46 @@ func (s *Server) handleDLQMutate(w http.ResponseWriter, r *http.Request, op func
 
 	n, err := op(r.Context(), queue, sel)
 	if err != nil {
+		_ = s.audit().Emit(audit.Record{
+			Timestamp: time.Now().UTC(), Principal: principal,
+			Action: action, Queue: queue, Selector: selDesc,
+			Count: -1, Outcome: audit.OutcomeFailure, ErrorMessage: err.Error(),
+		})
 		Error(w, r, CodeInternal, WithDetail("storage: "+err.Error()))
 		return
 	}
+	_ = s.audit().Emit(audit.Record{
+		Timestamp: time.Now().UTC(), Principal: principal,
+		Action: action, Queue: queue, Selector: selDesc,
+		Count: n, Outcome: audit.OutcomeSuccess,
+	})
 	writeJSON(w, http.StatusOK, countResponse{Count: n})
+}
+
+// selectorDescription returns a short human-readable description of a
+// selectorRequest for audit records: "ids:[x,y]", "ids:N", "filter:{...}",
+// or "all".
+func selectorDescription(req selectorRequest) string {
+	if len(req.IDs) > 0 {
+		if len(req.IDs) <= 3 {
+			return "ids:[" + strings.Join(req.IDs, ",") + "]"
+		}
+		return fmt.Sprintf("ids:%d", len(req.IDs))
+	}
+	if req.Filter != nil {
+		var parts []string
+		if req.Filter.ErrorType != "" {
+			parts = append(parts, "error_type:"+req.Filter.ErrorType)
+		}
+		if req.Filter.HandlerRef != "" {
+			parts = append(parts, "handler_ref:"+req.Filter.HandlerRef)
+		}
+		if len(parts) > 0 {
+			return "filter:{" + strings.Join(parts, ",") + "}"
+		}
+		return "filter:{}"
+	}
+	return "all"
 }
 
 // collectByFilter pages DLQList until exhausted, collecting all matching IDs.

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/srjn45/rdq/core/audit"
 	rdqlog "github.com/srjn45/rdq/core/log"
 	"github.com/srjn45/rdq/core/spi"
 	"github.com/srjn45/rdq/server/auth"
@@ -29,6 +30,7 @@ type Server struct {
 	storage         spi.Storage
 	configStore     srvconfig.Store  // T5.4: queue config CRUD + pause persistence
 	authz           *auth.Authorizer // T5.6: /v1 authN/Z; nil ⇒ open boundary (dev/embedded)
+	auditSink       audit.Sink       // T6.3: audit log sink; nil ⇒ discard
 	maxPayloadBytes int64
 	metricsHandler  http.Handler   // /metrics — set via WithMetricsHandler (T6.1)
 	logger          *rdqlog.Logger // structured request/transition logger (T6.2)
@@ -65,6 +67,22 @@ func WithConfigStore(cs srvconfig.Store) Option {
 // pass-through (dev/embedded mode) so the boundary is opt-in.
 func WithAuthorizer(a *auth.Authorizer) Option {
 	return func(s *Server) { s.authz = a }
+}
+
+// WithAuditSink injects the AuditSink for DLQ mutations and config writes
+// (T6.3, design 06). When unset or nil, audit records are silently discarded
+// (embedded mode). rdq-server wires the Postgres sink (server/audit.PGSink).
+func WithAuditSink(sink audit.Sink) Option {
+	return func(s *Server) { s.auditSink = sink }
+}
+
+// audit returns the configured AuditSink, falling back to the discard sink so
+// callers can always call s.audit().Emit(...) without a nil check.
+func (s *Server) audit() audit.Sink {
+	if s.auditSink != nil {
+		return s.auditSink
+	}
+	return audit.Discard()
 }
 
 // WithMaxPayloadBytes overrides the server-wide decoded-payload ceiling (default

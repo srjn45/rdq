@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
+	"github.com/srjn45/rdq/core/audit"
 	coreconfig "github.com/srjn45/rdq/core/config"
 	"github.com/srjn45/rdq/core/envelope"
 	srvconfig "github.com/srjn45/rdq/server/config"
@@ -131,9 +133,19 @@ func (s *Server) handlePutQueueConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.configStore.Put(queue, &qc); err != nil {
+		_ = s.audit().Emit(audit.Record{
+			Timestamp: time.Now().UTC(), Principal: principalName(r.Context()),
+			Action: audit.ActionConfigWrite, Queue: queue, Count: -1,
+			Outcome: audit.OutcomeFailure, ErrorMessage: err.Error(),
+		})
 		Error(w, r, CodeInternal, WithDetail("config store: "+err.Error()))
 		return
 	}
+	_ = s.audit().Emit(audit.Record{
+		Timestamp: time.Now().UTC(), Principal: principalName(r.Context()),
+		Action: audit.ActionConfigWrite, Queue: queue, Count: -1,
+		Outcome: audit.OutcomeSuccess,
+	})
 
 	paused := s.configStore.IsPaused(queue)
 	writeJSON(w, http.StatusOK, queueConfigResponse{Queue: queue, Config: &qc, Paused: paused})
