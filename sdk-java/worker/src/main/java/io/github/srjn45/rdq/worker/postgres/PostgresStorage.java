@@ -208,12 +208,16 @@ public final class PostgresStorage implements Storage {
         SELECT * FROM claimed""";
 
     // Appends the LEASE_EXPIRED attempt recorded when an expired lease is reclaimed
-    // (G7). started_at is the moment the lost lease lapsed (best proxy for when the
-    // dead claim was active); finished_at is the reclaim time — both from now().
+    // (G7). attempt_no is derived from the task's history (MAX(attempt_no)+1), not
+    // from attempt_count, so redriven tasks (attempt_count=0, history 1..N
+    // preserved) do not collide on the UNIQUE(task_id,attempt_no) constraint. The
+    // task row is locked within the claim transaction, making the subquery
+    // race-free. The first ? and the subquery's ? are both bound to task_id.
     private static final String INSERT_LEASE_EXPIRED_SQL = """
         INSERT INTO rdq_attempt
             (task_id, attempt_no, started_at, finished_at, outcome, error_type, error_message)
-        VALUES (?, ?, COALESCE(?, now()), now(), 'LEASE_EXPIRED', ?, ?)""";
+        VALUES (?, (SELECT COALESCE(MAX(attempt_no), 0) + 1 FROM rdq_attempt WHERE task_id = ?),
+                COALESCE(?, now()), now(), 'LEASE_EXPIRED', ?, ?)""";
 
     @Override
     public List<Claimed> claimDue(String queue, int limit, Duration lease) {
@@ -246,10 +250,9 @@ public final class PostgresStorage implements Storage {
                 if (!Status.IN_FLIGHT.wire().equals(cr.prevStatus)) {
                     continue;
                 }
-                int attemptNo = cr.attemptCount + 1;
                 try (PreparedStatement ps = conn.prepareStatement(INSERT_LEASE_EXPIRED_SQL)) {
                     ps.setString(1, cr.id);
-                    ps.setInt(2, attemptNo);
+                    ps.setString(2, cr.id); // subquery task_id
                     setTimestamp(ps, 3, cr.prevLease);
                     ps.setString(4, LEASE_EXPIRED_TYPE);
                     ps.setString(5, LEASE_EXPIRED_MESSAGE);

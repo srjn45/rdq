@@ -214,6 +214,73 @@ func TestClaimDue_RespectsLimitAndQueue(t *testing.T) {
 	}
 }
 
+// TestClaimDue_RedrivenLeaseExpired_NoUniqueViolation is the regression for the
+// LEASE_EXPIRED attempt_no collision: after a redrive (attempt_count=0, history
+// 1..N preserved), an expired lease on the redriven task must derive attempt_no
+// from history (MAX+1), not from the budget counter (attempt_count+1=1), which
+// would collide with the pre-redrive attempt_no=1 row.
+func TestClaimDue_RedrivenLeaseExpired_NoUniqueViolation(t *testing.T) {
+	ctx := context.Background()
+	s := migratedStore(ctx, t)
+
+	// Drive the task through two attempts and into the DLQ.
+	// History: attempt_no 1 (RETRYABLE_FAILURE), attempt_no 2 (PERMANENT_FAILURE).
+	seedPending(ctx, t, s, "01J2ZN0000000000000000000A", "q", time.Now().Add(-time.Minute))
+	c := mustClaimOne(ctx, t, s, "q", time.Hour)
+	if err := s.Reschedule(ctx, c.Task.ID, c.Token,
+		failedAttempt(1, envelope.OutcomeRetryableFailure, "e1"),
+		time.Now().Add(-time.Minute)); err != nil {
+		t.Fatalf("Reschedule: %v", err)
+	}
+	c = mustClaimOne(ctx, t, s, "q", time.Hour)
+	if err := s.DeadLetter(ctx, c.Task.ID, c.Token,
+		failedAttempt(2, envelope.OutcomePermanentFailure, "e2")); err != nil {
+		t.Fatalf("DeadLetter: %v", err)
+	}
+
+	// Redrive: attempt_count resets to 0, history rows (attempt_no 1 and 2) preserved.
+	n, err := s.Redrive(ctx, "q", spi.Selector{IDs: []spi.TaskID{"01J2ZN0000000000000000000A"}})
+	if err != nil {
+		t.Fatalf("Redrive: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("Redrive returned %d, want 1", n)
+	}
+
+	// Claim with a negative-duration lease — it expires immediately, leaving the
+	// row IN_FLIGHT with an already-elapsed lease_expires_at.
+	dead, err := s.ClaimDue(ctx, "q", 10, -time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimDue (dead lease): %v", err)
+	}
+	if len(dead) != 1 {
+		t.Fatalf("dead-lease claim got %d, want 1", len(dead))
+	}
+
+	// Reclaim. Before the fix: attempt_count=0 so the INSERT used attempt_no=1,
+	// colliding with the pre-redrive history row → unique violation → error.
+	// After the fix: MAX(attempt_no)=2 → INSERT attempt_no=3 → succeeds.
+	reclaimed, err := s.ClaimDue(ctx, "q", 10, time.Hour)
+	if err != nil {
+		t.Fatalf("reclaim ClaimDue: %v", err)
+	}
+	if len(reclaimed) != 1 {
+		t.Fatalf("reclaim got %d, want 1", len(reclaimed))
+	}
+	env := reclaimed[0].Task
+	if len(env.Attempts) != 3 {
+		t.Fatalf("history has %d attempts, want 3 (2 pre-redrive + LEASE_EXPIRED)", len(env.Attempts))
+	}
+	leaseExpAttempt := env.Attempts[2]
+	if leaseExpAttempt.AttemptNo != 3 {
+		t.Errorf("LEASE_EXPIRED attempt_no = %d, want 3 (history-based, not budget-based 1)",
+			leaseExpAttempt.AttemptNo)
+	}
+	if leaseExpAttempt.Outcome != envelope.OutcomeLeaseExpired {
+		t.Errorf("attempt outcome = %s, want LEASE_EXPIRED", leaseExpAttempt.Outcome)
+	}
+}
+
 // mustClaimOne claims exactly one task from queue and returns it, failing the
 // test otherwise. Shared by the mutation tests.
 func mustClaimOne(ctx context.Context, t *testing.T, s *Store, queue string, lease time.Duration) spi.Claimed {

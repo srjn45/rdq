@@ -154,13 +154,17 @@ claimed AS (
 SELECT * FROM claimed`
 
 // insertLeaseExpiredSQL appends the LEASE_EXPIRED attempt recorded when an
-// expired lease is reclaimed (G7). started_at is the moment the lost lease
-// lapsed (best available proxy for when the dead claim was active); finished_at
-// is the reclaim time, both from the storage clock (G9).
+// expired lease is reclaimed (G7). attempt_no is derived from the task's
+// history (MAX(attempt_no)+1), not from attempt_count, so redriven tasks
+// (attempt_count=0, history 1..N preserved) do not collide on the
+// UNIQUE(task_id,attempt_no) constraint. The task row is locked within the
+// claim transaction, making the subquery race-free. started_at is the moment
+// the lost lease lapsed; finished_at is the reclaim time (both storage clock).
 const insertLeaseExpiredSQL = `
 INSERT INTO rdq_attempt
     (task_id, attempt_no, started_at, finished_at, outcome, error_type, error_message)
-VALUES ($1, $2, COALESCE($3, now()), now(), 'LEASE_EXPIRED', $4, $5)`
+VALUES ($1, (SELECT COALESCE(MAX(attempt_no), 0) + 1 FROM rdq_attempt WHERE task_id = $1),
+        COALESCE($2, now()), now(), 'LEASE_EXPIRED', $3, $4)`
 
 // ClaimDue atomically claims up to limit due tasks for queue (design 02 §4). A
 // task is due when, by the storage clock (G9), it is PENDING with
@@ -219,16 +223,15 @@ func (s *Store) ClaimDue(ctx context.Context, queue string, limit int, lease tim
 		if cr.prevStatus != string(envelope.StatusInFlight) {
 			continue
 		}
-		attemptNo := cr.row.AttemptCount + 1
 		if _, err := tx.ExecContext(ctx, insertLeaseExpiredSQL,
-			cr.row.ID, attemptNo, cr.prevLease, leaseExpiredType, leaseExpiredMessage); err != nil {
+			cr.row.ID, cr.prevLease, leaseExpiredType, leaseExpiredMessage); err != nil {
 			return nil, fmt.Errorf("rdq/postgres: recording lease-expired attempt: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE rdq_task SET attempt_count = attempt_count + 1 WHERE id = $1`, cr.row.ID); err != nil {
 			return nil, fmt.Errorf("rdq/postgres: counting lease-expired attempt: %w", err)
 		}
-		cr.row.AttemptCount = attemptNo
+		cr.row.AttemptCount++
 	}
 
 	// Assemble each claimed envelope with its full (now up-to-date) history.
