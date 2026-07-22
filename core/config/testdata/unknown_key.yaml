@@ -1,0 +1,8 @@
+config_version: 1
+
+# A typo: `max_attempt` instead of `max_attempts`. Strict loading must reject
+# this at load time rather than silently ignoring it (design 03 §3).
+queues:
+  payments.charge:
+    retry:
+      max_attempt: 8

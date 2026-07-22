@@ -15,8 +15,17 @@ time** (envelope §3), which makes every field below live-tunable during an inci
 | Embedded SDK | Optional **YAML file** | For teams that prefer config-as-files; same schema. One source per process — code or file, not merged. |
 | `rdq-server` | **YAML file** at boot + **admin API** (create/update per queue) | API-written configs persist via a small `ConfigStore` interface (CRUD + watch), separate from the task `Storage` SPI. File and API configs share the schema; API wins for a queue it defines. |
 
-A top-level `defaults` block applies to every queue; per-queue values override it. That is
-the only merging rdq does.
+A top-level `defaults` block applies to every queue; per-queue values override it via
+**per-key deep-merge** — a queue that sets one field of `retry` inherits the rest of the
+`defaults.retry` block rather than replacing it wholesale (OI-3, resolved v1 — see design 05
+§0; examples in §6). That per-key merge is the only merging rdq does.
+
+**SDK artifact split (OQ-1, resolved v1 — see design 05 §0).** The engine is split into a
+submit-only artifact and a worker artifact: Java `io.github.srjn45:rdq-java-client` (submit) +
+`io.github.srjn45:rdq-java-worker` (engine, depends on client); Go a `submit` sub-package
+usable without importing the worker. Submit-only hosts still carry queue config for the fields
+they use (e.g. `sync_retry` runs in-process before durable enqueue), while `worker`/`callback`
+fields take effect only where a worker or `rdq-server` claims the queue.
 
 Updates take effect at the **next claim** — no restarts, no redeploys (this is the payoff
 of claim-time resolution). Embedded file-watch reload is optional; the admin API path is
@@ -49,6 +58,8 @@ defaults:                    # applies to all queues; any per-queue key override
     batch_size: 32           # ClaimDue limit
     poll_interval: 500ms     # floor when Notify capability is absent
     concurrency: 8           # parallel handler invocations per instance
+    rate_limit: 100/s        # optional token-bucket cap on handler/callback invocations;
+                             # PER INSTANCE (G12) — effective global rate = N × this; omit = unlimited
 
 queues:
   payments.charge:
@@ -92,6 +103,12 @@ preserves unknown fields — config typos must fail fast, at load/API time, not 
   (server config, not queue config — a queue author must not be able to widen it; SSRF
   mitigation, PRD FR-25/§12)
 - `config_version` bumps on breaking schema changes; loaders reject newer-than-known
+- `worker.rate_limit` is a **per-instance** token bucket (G12, resolved v1 — see design 05
+  §0.1): coordination-free, matching the stateless-worker model (PRD FR-19), so the effective
+  global rate across N instances is `N × rate_limit`. This is documented loudly because it is a
+  common footgun — a truly global limiter would require storage coordination and is post-v1 at
+  most. It exists mainly to protect a struggling downstream during bulk redrive after an outage
+  (the thundering-herd case, FR-17).
 
 Backoff formula (engine-side, for reference):
 `delay(n) = min(initial_backoff × multiplier^(n−1), max_backoff) × (1 ± jitter·rand)`.
@@ -117,13 +134,16 @@ allowlist, metrics endpoint, global defaults block. Rule of thumb: **per-queue c
 what a queue's owning team may set; server config is what the platform operator sets.**
 The admin API enforces that boundary (per-queue authz, PRD FR-25).
 
-## 6. Open items
+## 6. Open items (resolved for v1)
 
-- **OI-1:** per-queue rate limiting of handler/callback invocations (protect a struggling
-  downstream during mass redrive). Leaning: yes, `worker.rate_limit` post-v1 — bulk redrive
-  after an outage is exactly when you'd thundering-herd the service you just fixed.
-- **OI-2:** config change audit — server mode should record who changed a queue's config
-  (same audit sink as redrive/purge, FR-18). Leaning: yes in v1 for API-sourced changes.
-- **OI-3:** does `defaults` merging go one level deep (block replace) or per-key deep-merge?
-  Leaning: per-key deep-merge, documented with examples — block replace causes surprising
-  resets when a queue overrides one field of `retry`.
+- **OI-1 — resolved v1 (see design 05 §0):** per-queue rate limiting **ships in v1** as
+  `worker.rate_limit` (§2), a token bucket the engine enforces on handler/callback invocations.
+  Bulk redrive after an outage is exactly the thundering-herd case, so the flagship redrive
+  story (FR-17) must ship with its safety valve. Per-instance semantics: see §3 (G12).
+- **OI-2 — resolved v1 (see design 05 §0):** config-change audit **is in v1** for API-sourced
+  config writes, through the same audit sink as redrive/purge (FR-18).
+- **OI-3 — resolved v1 (see design 05 §0):** `defaults` merging is **per-key deep-merge**, not
+  block-replace (§1) — block-replace causes surprising resets. Example: with
+  `defaults.retry: {max_attempts: 5, initial_backoff: 1s, jitter: 0.2}`, a queue that sets only
+  `retry.max_attempts: 8` still inherits `initial_backoff: 1s` and `jitter: 0.2`; only
+  `max_attempts` is overridden.
