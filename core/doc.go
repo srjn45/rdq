@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package core is the rdq engine and the home of the frozen storage contract:
 // the language-neutral task/envelope model, the storage service-provider
 // interface every backend implements, and the compliance kit that verifies a

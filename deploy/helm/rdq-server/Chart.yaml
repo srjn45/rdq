@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: v2
+name: rdq-server
+description: rdq central retry hub — REST/DLQ/admin API backed by PostgreSQL
+type: application
+version: 0.1.0
+appVersion: "2.1.0"
+keywords:
+  - rdq
+  - retry
+  - dead-letter-queue
+home: https://github.com/srjn45/rdq
+sources:
+  - https://github.com/srjn45/rdq
+maintainers:
+  - name: srjn45
+    url: https://github.com/srjn45
