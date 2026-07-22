@@ -23,3 +23,8 @@ gradle-app.setting
 build
 
 .idea
+
+# Go build artifacts
+dist/
+rdq-server
+sdk-java/dist/
