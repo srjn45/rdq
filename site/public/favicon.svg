@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" fill="none" role="img" aria-label="rdq">
+  <!-- rdq monochrome mark — a retry loop over a queue, single color via currentColor.
+       Recolor with CSS `color:` (web) or fill/stroke override. Reads cleanly down to 16px. -->
+  <g stroke="currentColor" fill="none" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
+    <!-- retry loop: ~300° arc, opening at the top-right -->
+    <path d="M120 44 A76 76 0 1 1 62 72" />
+    <!-- arrowhead at the loop's head, pointing into the opening -->
+    <path d="M120 44 l-30 -6 M120 44 l-8 30" />
+  </g>
+</svg>

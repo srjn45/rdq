@@ -1,0 +1,11 @@
+/* Tune Starlight's accent to rdq's amber so docs match the landing page. */
+:root {
+  --sl-color-accent-low: #3a1e04;
+  --sl-color-accent: #db6d28;
+  --sl-color-accent-high: #ffd7b5;
+}
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #2a1705;
+  --sl-color-accent: #e3873c;
+  --sl-color-accent-high: #ffe4cc;
+}

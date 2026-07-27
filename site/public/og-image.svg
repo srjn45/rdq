@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-label="rdq — Retry and Dead-letter Queues">
+  <rect width="1200" height="630" fill="#0d1117"/>
+  <rect width="1200" height="6" fill="#db6d28"/>
+
+  <!-- Badge -->
+  <rect x="96" y="150" width="150" height="150" rx="36" fill="#db6d28"/>
+  <g stroke="#0d1117" fill="none" stroke-width="15" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M171 190 A46 46 0 1 1 135 206" />
+    <path d="M171 190 l-19 -3 M171 190 l-5 19" />
+  </g>
+
+  <text x="286" y="270" fill="#EEF2F5"
+        font-family="Inter, 'Helvetica Neue', Arial, sans-serif"
+        font-size="150" font-weight="800" letter-spacing="-8">rdq</text>
+
+  <text x="100" y="400" fill="#EEF2F5"
+        font-family="Inter, 'Helvetica Neue', Arial, sans-serif"
+        font-size="52" font-weight="700">Retry &amp; Dead-letter Queues</text>
+  <text x="100" y="466" fill="#8b949e"
+        font-family="Inter, 'Helvetica Neue', Arial, sans-serif"
+        font-size="40" font-weight="500">for any broker, any storage, any language.</text>
+
+  <text x="100" y="560" fill="#e3873c"
+        font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+        font-size="30" font-weight="500">Bring-your-own-storage · broker-agnostic · polyglot · first-class DLQ</text>
+</svg>

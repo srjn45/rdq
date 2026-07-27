@@ -1,0 +1,24 @@
+---
+const base = import.meta.env.BASE_URL;
+const code = `# 1. Point rdq at storage you already run, and start the hub
+docker run -e RDQ_DSN=postgres://user:pass@host/db \\
+           -p 8080:8080 ghcr.io/srjn45/rdq-server:latest
+
+# 2. Submit a failed unit of work
+curl -X POST localhost:8080/v1/queues/payments.charge/tasks \\
+  -d '{"handler_ref":"charge-payment","payload":"eyJvcmRlciI6NDJ9"}'
+
+# 3. Later: inspect what never succeeded, then redrive after the fix ships
+rdq dlq list --queue payments.charge
+rdq dlq redrive --queue payments.charge --error TimeoutException`;
+---
+<section class="section">
+  <div class="wrap">
+    <h2 style="text-align:center">Quickstart</h2>
+    <p style="text-align:center;color:var(--muted)">Run the central retry hub — any language talks to it over REST or gRPC.</p>
+    <pre class="mono" style="background:#010409;border:1px solid var(--border);border-radius:8px;padding:16px;overflow:auto"><code>{code}</code></pre>
+    <p style="text-align:center;margin-top:16px">
+      <a href={`${base}start/quickstart/`}>Full quickstart — Go, Java &amp; server&nbsp;→</a>
+    </p>
+  </div>
+</section>
