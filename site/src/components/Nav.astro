@@ -1,0 +1,16 @@
+---
+const base = import.meta.env.BASE_URL;
+---
+<nav class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href={base}><span class="caret">⟳</span> rdq</a>
+    <div class="nav-links">
+      <a class="hide-sm" href="#features">Features</a>
+      <a class="hide-sm" href="#how">How it works</a>
+      <a href={`${base}start/what-is-rdq/`}>Docs</a>
+      <a class="hide-sm" href={`${base}blog/`}>Blog</a>
+      <a class="hide-sm" href="https://github.com/srjn45/rdq">GitHub</a>
+      <a class="nav-cta" href={`${base}start/install/`}>Install</a>
+    </div>
+  </div>
+</nav>
