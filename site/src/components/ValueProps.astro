@@ -1,0 +1,12 @@
+<section class="section">
+  <div class="wrap" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px">
+    <div style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:16px">
+      <h3>🗄️ Bring your own storage</h3><p style="color:var(--muted)">Retry queues and DLQs live in the datastore you already run — PostgreSQL first, more via a documented SPI. No new stateful infra.</p></div>
+    <div style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:16px">
+      <h3>🔌 Broker-agnostic</h3><p style="color:var(--muted)">Kafka, SQS, Redpanda, RabbitMQ, or no broker at all. rdq accepts failures from any source and never sits on the happy path.</p></div>
+    <div style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:16px">
+      <h3>⚰️ DLQ as a product</h3><p style="color:var(--muted)">Every attempt's error, stack trace, and timestamp travels into the DLQ — browse, filter, and safely single- or bulk-redrive.</p></div>
+    <div style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:16px">
+      <h3>📈 Scales sideways</h3><p style="color:var(--muted)">Stateless workers, atomic claims, and leases. Add a node to scale; a <code>kill -9</code> mid-task is a non-event.</p></div>
+  </div>
+</section>

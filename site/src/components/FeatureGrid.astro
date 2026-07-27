@@ -1,0 +1,27 @@
+---
+const base = import.meta.env.BASE_URL;
+const tiles = [
+  ['Retry policies & backoff', 'guides/queue-configuration'],
+  ['The outcome contract', 'concepts/outcome-contract'],
+  ['DLQ browse & redrive', 'guides/dlq-and-redrive'],
+  ['Atomic claims & leases', 'concepts/task-lifecycle'],
+  ['Storage SPI + compliance kit', 'concepts/storage-spi'],
+  ['Language-neutral envelope', 'concepts/wire-envelope'],
+  ['Handler registry & versions', 'concepts/task-lifecycle'],
+  ['REST & gRPC intake', 'reference/server-api'],
+  ['HTTP / gRPC callbacks', 'guides/rdq-server'],
+  ['Prometheus metrics', 'guides/observability'],
+  ['Audit log on every mutation', 'guides/dlq-and-redrive'],
+  ['rdq CLI', 'guides/cli'],
+];
+---
+<section class="section">
+  <div class="wrap">
+    <h2 style="text-align:center">Everything rdq does</h2>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:22px">
+      {tiles.map(([label, slug]) => (
+        <a href={`${base}${slug}/`} style="background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:14px;text-decoration:none;color:var(--fg)">{label}</a>
+      ))}
+    </div>
+  </div>
+</section>

@@ -1,0 +1,87 @@
+---
+// Inline, theme-aware architecture diagram. rdq never sits on the broker's hot
+// path — it accepts failed work, retries it from your storage, and dead-letters
+// what never succeeds.
+---
+<section class="section">
+  <div class="wrap" style="text-align:center">
+    <h2>How rdq fits</h2>
+    <p style="color:var(--muted);max-width:680px;margin:6px auto 26px">
+      rdq is not a broker and not on the happy path. A failed call is submitted to storage
+      you already run; stateless workers claim due tasks, re-invoke the handler on your
+      backoff schedule, and park exhausted work in the DLQ — inspectable and replayable.
+    </p>
+    <svg viewBox="0 0 920 380" role="img" width="100%"
+      aria-label="Architecture: producers submit failed work to rdq; stateless workers claim tasks from your storage, invoke the handler with backoff, and dead-letter exhausted tasks, which the CLI and API can redrive."
+      style="max-width:900px;background:var(--panel);border:1px solid var(--border);border-radius:10px">
+      <defs>
+        <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="#8b949e"/>
+        </marker>
+        <marker id="arwA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="#db6d28"/>
+        </marker>
+      </defs>
+      <style>
+        .bx { fill:#0d1117; stroke:#30363d; stroke-width:1.5; }
+        .bxa { fill:#0d1117; stroke:#db6d28; stroke-width:1.5; }
+        .t  { fill:#c9d1d9; font:600 15px system-ui,sans-serif; }
+        .ts { fill:#8b949e; font:400 12px ui-monospace,monospace; }
+        .lbl{ fill:#8b949e; font:400 12px ui-monospace,monospace; }
+        .ln { stroke:#8b949e; stroke-width:1.5; fill:none; }
+        .lna{ stroke:#db6d28; stroke-width:1.8; fill:none; }
+      </style>
+
+      <!-- Producers -->
+      <rect class="bx" x="24" y="60" width="200" height="86" rx="8"/>
+      <text class="t"  x="124" y="94"  text-anchor="middle">Your app / consumer</text>
+      <text class="ts" x="124" y="116" text-anchor="middle">Kafka · SQS · RabbitMQ</text>
+      <text class="ts" x="124" y="133" text-anchor="middle">or any func(args)</text>
+
+      <!-- Engine -->
+      <rect class="bxa" x="360" y="52" width="200" height="102" rx="8"/>
+      <text class="t"  x="460" y="88"  text-anchor="middle">rdq engine</text>
+      <text class="ts" x="460" y="110" text-anchor="middle">stateless workers</text>
+      <text class="ts" x="460" y="127" text-anchor="middle">claim · retry · lease</text>
+
+      <!-- Handler -->
+      <rect class="bx" x="700" y="60" width="196" height="86" rx="8"/>
+      <text class="t"  x="798" y="94"  text-anchor="middle">Handler</text>
+      <text class="ts" x="798" y="116" text-anchor="middle">in-process fn, or</text>
+      <text class="ts" x="798" y="133" text-anchor="middle">HTTP / gRPC callback</text>
+
+      <!-- Storage -->
+      <rect class="bx" x="300" y="248" width="320" height="104" rx="8"/>
+      <text class="t"  x="460" y="274" text-anchor="middle">Your storage — PostgreSQL</text>
+      <rect x="322" y="290" width="130" height="46" rx="6" fill="#161b22" stroke="#30363d"/>
+      <text class="ts" x="387" y="318" text-anchor="middle">retry queue</text>
+      <rect x="468" y="290" width="130" height="46" rx="6" fill="#161b22" stroke="#db6d28"/>
+      <text class="ts" x="533" y="318" text-anchor="middle" style="fill:#e3873c">DLQ</text>
+
+      <!-- CLI / API -->
+      <rect class="bx" x="700" y="266" width="196" height="70" rx="8"/>
+      <text class="t"  x="798" y="296" text-anchor="middle">rdq CLI / API</text>
+      <text class="ts" x="798" y="318" text-anchor="middle">browse · redrive · purge</text>
+
+      <!-- submit -->
+      <path class="lna" d="M224 103 H360" marker-end="url(#arwA)"/>
+      <text class="lbl" x="292" y="94" text-anchor="middle" style="fill:#e3873c">submit</text>
+
+      <!-- invoke / failure loop -->
+      <path class="ln" d="M560 88 H700" marker-end="url(#arw)"/>
+      <text class="lbl" x="630" y="80" text-anchor="middle">invoke</text>
+      <path class="ln" d="M700 122 H560" marker-end="url(#arw)"/>
+      <text class="lbl" x="630" y="140" text-anchor="middle">fail → backoff</text>
+
+      <!-- worker <-> storage -->
+      <path class="ln" d="M440 154 V248" marker-end="url(#arw)"/>
+      <path class="ln" d="M480 248 V154" marker-end="url(#arw)"/>
+      <text class="lbl" x="460" y="205" text-anchor="middle">claim / record (atomic)</text>
+
+      <!-- dlq -> cli -> retry -->
+      <path class="ln" d="M598 313 H700" marker-end="url(#arw)"/>
+      <path class="lna" d="M798 266 V210 H387 V290" marker-end="url(#arwA)"/>
+      <text class="lbl" x="705" y="202" text-anchor="middle" style="fill:#e3873c">redrive</text>
+    </svg>
+  </div>
+</section>

@@ -1,0 +1,25 @@
+---
+const base = import.meta.env.BASE_URL;
+---
+<section class="section" style="text-align:center">
+  <div class="wrap">
+    <h1 style="font-size:2.6rem;margin:0">Retry &amp; Dead-letter Queues</h1>
+    <p style="color:var(--muted);font-size:1.15rem;max-width:640px;margin:10px auto 0">
+      A function call failed — a Kafka handler, an SQS consumer, any <code>func(args)</code>.
+      Hand rdq the handler and its payload; rdq retries it on your schedule, or parks it in a
+      dead-letter queue with its <strong>full failure history</strong>, ready to inspect and redrive.
+    </p>
+    <p style="margin-top:22px">
+      <a href={`${base}start/what-is-rdq/`} style="background:var(--accent);color:var(--accent-fg);padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:600">Get started</a>
+      &nbsp;
+      <a href="https://github.com/srjn45/rdq" style="background:var(--panel);padding:10px 18px;border-radius:6px;text-decoration:none">★ Star on GitHub</a>
+    </p>
+    <p style="color:var(--muted);font-size:0.9rem;margin-top:14px">
+      Bring-your-own-storage · broker-agnostic · polyglot · at-least-once · horizontally scalable
+    </p>
+    <p style="color:var(--muted);font-size:0.9rem;margin-top:2px">
+      Embed the <a href={`${base}guides/go-sdk/`}>Go</a> or <a href={`${base}guides/java-sdk/`}>Java</a> SDK,
+      or run <a href={`${base}guides/rdq-server/`}>rdq-server</a> as a central retry hub for any language.
+    </p>
+  </div>
+</section>

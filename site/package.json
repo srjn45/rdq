@@ -1,0 +1,15 @@
+{
+  "name": "rdq-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.34.0",
+    "astro": "^5.4.0",
+    "starlight-blog": "^0.25.0"
+  }
+}

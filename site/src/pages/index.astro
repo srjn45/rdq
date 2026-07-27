@@ -1,0 +1,73 @@
+---
+import '../styles/landing.css';
+import Hero from '../components/Hero.astro';
+import ValueProps from '../components/ValueProps.astro';
+import Architecture from '../components/Architecture.astro';
+import CodeShowcase from '../components/CodeShowcase.astro';
+import FeatureGrid from '../components/FeatureGrid.astro';
+import Quickstart from '../components/Quickstart.astro';
+import Blog from '../components/Blog.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+
+const goCode = `// Register a handler under a stable name — it survives
+// deploys, restarts, and language boundaries.
+rdq.Register("charge-payment", func(ctx context.Context,
+    t envelope.Envelope) error {
+    if err := charge(t.Payload()); err != nil {
+        return err   // non-nil → retried on your backoff schedule
+    }
+    return nil       // nil → SUCCEEDED
+})
+
+// A worker claims due tasks atomically, invokes the
+// handler, and records every attempt.
+w, _ := rdq.NewWorker(store, rdq.WithQueue("payments.charge",
+    rdq.MaxAttempts(5),
+    rdq.BackoffExponential(time.Second, 2.0, 5*time.Minute),
+))
+w.Run(ctx)`;
+
+const dlqCode = `$ rdq dlq list --queue payments.charge
+ID          ERROR             ATTEMPTS  AGE
+01J8Z…K3    TimeoutException  5         2h14m
+01J8Z…M7    TimeoutException  5         1h58m
+
+# read one task's full failure history
+$ rdq dlq get 01J8Z…K3
+
+# fix shipped — redrive everything that timed out
+$ rdq dlq redrive --queue payments.charge \\
+      --error TimeoutException --since 14:00
+redriven 128 tasks  (audit id 01J90…)`;
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>rdq — Retry &amp; Dead-letter Queues for any broker, any storage, any language</title>
+    <meta name="description" content="Durable retries and first-class dead-letter queues that live in the datastore you already run. Broker-agnostic, polyglot, and horizontally scalable — embed the Go or Java SDK, or run rdq-server." />
+    <link rel="icon" href={`${import.meta.env.BASE_URL}favicon.svg`} />
+    <meta property="og:title" content="rdq — Retry & Dead-letter Queues" />
+    <meta property="og:description" content="Retry & dead-letter queues for any broker, any storage, any language. Bring-your-own-storage, broker-agnostic, polyglot, with first-class DLQ analysis and redrive." />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://srjn45.github.io/rdq/" />
+    <meta property="og:image" content="https://srjn45.github.io/rdq/og-image.svg" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://srjn45.github.io/rdq/og-image.svg" />
+  </head>
+  <body>
+    <Hero />
+    <ValueProps />
+    <Architecture />
+    <CodeShowcase side="left" title="Embed the SDK — zero extra infra"
+      blurb="Register handlers under stable names, wrap an existing consumer, and let the worker retry with backoff and dead-letter with full context. The <strong>only</strong> dependency is the storage you already run."
+      code={goCode} href="guides/go-sdk/" hrefLabel="Go SDK guide →" />
+    <CodeShowcase side="right" title="A DLQ you can actually work with"
+      blurb="Every attempt's error, stack, and timestamp lands in the DLQ. Browse and filter by queue, error type, handler, or time — then single- or bulk-redrive after a fix ships. Every mutation is audit-logged."
+      code={dlqCode} href="guides/dlq-and-redrive/" hrefLabel="DLQ &amp; redrive guide →" />
+    <FeatureGrid />
+    <Quickstart />
+    <Blog />
+    <SiteFooter />
+  </body>
+</html>
