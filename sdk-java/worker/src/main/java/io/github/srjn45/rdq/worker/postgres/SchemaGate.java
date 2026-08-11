@@ -41,7 +41,7 @@ final class SchemaGate {
      * {@code storage/postgres.SchemaVersion}; the T2.1 migrations write this
      * number into {@code rdq_schema_version}.
      */
-    static final int SCHEMA_VERSION = 1;
+    static final int SCHEMA_VERSION = 3;
 
     // "42P01" is the SQLSTATE for undefined_table: rdq_schema_version has not
     // been created, so the migrations have not run.
