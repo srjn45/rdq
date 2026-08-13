@@ -245,26 +245,41 @@ class RetryExampleTest {
     }
 
     /**
-     * Applies the frozen T2.1 migration to {@code ds}. Locates the SQL file by
-     * walking up from {@code user.dir}, the same strategy used by
+     * The frozen up-migration sequence, applied in order — matching a production
+     * database (all migrations via {@code rdq migrate}) so the exact-match
+     * {@code rdq_schema_version} gate is satisfied.
+     */
+    private static final String[] MIGRATIONS = {
+        "0001_init.up.sql",
+        "0002_config.up.sql",
+        "0003_audit.up.sql",
+    };
+
+    /**
+     * Applies the full frozen migration sequence to {@code ds}. Locates each SQL
+     * file by walking up from {@code user.dir}, the same strategy used by
      * {@code TestPostgres} and {@code EngineTestHelper}.
      */
     @SuppressFBWarnings(
         value = "SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE",
-        justification = "frozen T2.1 migration SQL read from the repo — not user input")
+        justification = "frozen migration SQL read from the repo — not user input")
     private static void applyMigrations(DataSource ds) {
-        Path file = findRepoFile("storage/postgres/migrations/0001_init.up.sql");
-        String sql;
-        try {
-            sql = Files.readString(file, StandardCharsets.UTF_8);
-        } catch (IOException ex) {
-            throw new RuntimeException("reading migration " + file, ex);
-        }
         try (Connection conn = ds.getConnection();
             Statement st = conn.createStatement()) {
-            st.execute(sql);
+            for (String name : MIGRATIONS) {
+                st.execute(readMigration(name));
+            }
         } catch (SQLException ex) {
-            throw new RuntimeException("applying T2.1 migration", ex);
+            throw new RuntimeException("applying migrations", ex);
+        }
+    }
+
+    private static String readMigration(String name) {
+        Path file = findRepoFile("storage/postgres/migrations/" + name);
+        try {
+            return Files.readString(file, StandardCharsets.UTF_8);
+        } catch (IOException ex) {
+            throw new RuntimeException("reading migration " + file, ex);
         }
     }
 
