@@ -25,65 +25,84 @@ import java.sql.SQLException;
 import java.sql.Statement;
 
 /**
- * The {@code rdq_schema_version} startup gate (design 02 &sect;4, design 05 G5).
+ * The worker's {@code rdq_schema_version} startup gate (design 02 &sect;4,
+ * design 05 G5, issue #54).
  *
  * <p>The Postgres schema is a cross-language contract: this Java binding and the
- * Go plugin bind to the SAME tables, gated by the same version number. Before an
- * engine touches any row it reads {@code rdq_schema_version} and refuses to run
- * against an unknown (newer) or unmigrated (older) schema rather than corrupting
- * rows it does not understand. Bump {@link #SCHEMA_VERSION} in lockstep with the
- * Go {@code postgres.SchemaVersion} whenever a migration changes the contract.
+ * Go plugin bind to the SAME task tables ({@code rdq_task} / {@code rdq_dlq_task}
+ * / {@code rdq_attempt}). Before an engine touches any row it reads
+ * {@code rdq_schema_version} and refuses to run against an unknown (newer) or
+ * unmigrated (older) task contract rather than corrupting rows it does not
+ * understand.
+ *
+ * <p>The gate reads {@code task_contract_version}, NOT the overall
+ * {@code version}. The overall version is bumped by every migration, including
+ * server-only ones (config, audit) that never touch the task tables; gating on
+ * it locked workers out of a database the moment the server gained a feature.
+ * The task-contract counter advances only when the task tables themselves
+ * change, so a worker survives server-only migrations while still refusing a
+ * genuinely-changed task schema. Bump {@link #TASK_CONTRACT_VERSION} in lockstep
+ * with the Go {@code storage/postgres.TaskContractVersion} whenever a migration
+ * changes the task-table contract.
  */
 final class SchemaGate {
 
     /**
-     * The schema-contract version this build understands. Tracks the Go
-     * {@code storage/postgres.SchemaVersion}; the T2.1 migrations write this
-     * number into {@code rdq_schema_version}.
+     * The task-table contract version this worker binds to. Tracks the Go
+     * {@code storage/postgres.TaskContractVersion}; the migrations write this
+     * number into {@code rdq_schema_version.task_contract_version}. The
+     * {@code SchemaContractLockstepTest} unit test fails the build if this drifts
+     * from the Go constant.
      */
-    static final int SCHEMA_VERSION = 3;
+    static final int TASK_CONTRACT_VERSION = 1;
 
     // "42P01" is the SQLSTATE for undefined_table: rdq_schema_version has not
     // been created, so the migrations have not run.
     private static final String UNDEFINED_TABLE = "42P01";
+    // "42703" is undefined_column: task_contract_version is absent, i.e. the
+    // database is on a pre-0004 schema that predates this gate.
+    private static final String UNDEFINED_COLUMN = "42703";
 
     private SchemaGate() {
     }
 
     /**
-     * Reads {@code rdq_schema_version} on {@code conn} and verifies this build may
-     * run against the database.
+     * Reads {@code rdq_schema_version.task_contract_version} on {@code conn} and
+     * verifies this worker may bind to the task tables.
      *
-     * @throws SchemaNotInitializedException  if the migrations have not been applied
-     * @throws SchemaVersionMismatchException if the recorded version differs
+     * @throws SchemaNotInitializedException  if the migrations have not been
+     *                                        applied (or predate the task-contract
+     *                                        column)
+     * @throws SchemaVersionMismatchException if the recorded task contract differs
      */
     static void verify(Connection conn) {
-        int version;
+        int contract;
         try (Statement st = conn.createStatement();
-            ResultSet rs = st.executeQuery("SELECT version FROM rdq_schema_version WHERE singleton")) {
+            ResultSet rs =
+                st.executeQuery("SELECT task_contract_version FROM rdq_schema_version WHERE singleton")) {
             if (!rs.next()) {
                 throw new SchemaNotInitializedException();
             }
-            version = rs.getInt(1);
+            contract = rs.getInt(1);
         } catch (SQLException ex) {
-            if (UNDEFINED_TABLE.equals(ex.getSQLState())) {
+            if (UNDEFINED_TABLE.equals(ex.getSQLState()) || UNDEFINED_COLUMN.equals(ex.getSQLState())) {
                 throw new SchemaNotInitializedException();
             }
-            throw new StorageException("rdq/postgres: reading schema version", ex);
+            throw new StorageException("rdq/postgres: reading task-contract version", ex);
         }
-        check(version);
+        check(contract);
     }
 
     /**
      * The pure comparison behind {@link #verify}, split out so the gate logic is
      * unit-testable without a database.
      *
-     * @throws SchemaVersionMismatchException if {@code databaseVersion} differs
-     *                                        from {@link #SCHEMA_VERSION}
+     * @throws SchemaVersionMismatchException if {@code databaseContract} differs
+     *                                        from {@link #TASK_CONTRACT_VERSION}
      */
-    static void check(int databaseVersion) {
-        if (databaseVersion != SCHEMA_VERSION) {
-            throw new SchemaVersionMismatchException(databaseVersion, SCHEMA_VERSION);
+    static void check(int databaseContract) {
+        if (databaseContract != TASK_CONTRACT_VERSION) {
+            throw new SchemaVersionMismatchException(databaseContract, TASK_CONTRACT_VERSION);
         }
     }
 }

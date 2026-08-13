@@ -154,6 +154,44 @@ func TestMigrateUpDown(t *testing.T) {
 		t.Fatalf("second Migrate up: %v", err)
 	}
 
+	// --- worker task-contract gate (issue #54) ---
+	// After migrating, the task-contract gate passes and records TaskContractVersion.
+	if err := CheckTaskContract(ctx, db); err != nil {
+		t.Fatalf("post-migrate task-contract gate: %v", err)
+	}
+	if got := recordedTaskContract(ctx, t, db); got != TaskContractVersion {
+		t.Errorf("task_contract_version = %d, want %d", got, TaskContractVersion)
+	}
+	// The decoupling guarantee: a server-only bump of the OVERALL version must
+	// NOT lock the worker out — CheckTaskContract still passes even though
+	// CheckSchemaVersion (the full-schema gate) now reports a mismatch.
+	if _, err := db.ExecContext(ctx,
+		"UPDATE rdq_schema_version SET version = $1 WHERE singleton", SchemaVersion+1); err != nil {
+		t.Fatalf("bumping overall version: %v", err)
+	}
+	if err := CheckSchemaVersion(ctx, db); !errors.Is(err, ErrSchemaVersionMismatch) {
+		t.Fatalf("full-schema gate against bumped version: got %v, want ErrSchemaVersionMismatch", err)
+	}
+	if err := CheckTaskContract(ctx, db); err != nil {
+		t.Fatalf("worker gate must survive a server-only version bump, got %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		"UPDATE rdq_schema_version SET version = $1 WHERE singleton", SchemaVersion); err != nil {
+		t.Fatalf("restoring overall version: %v", err)
+	}
+	// A genuine task-contract change (bump task_contract_version) DOES stop the worker.
+	if _, err := db.ExecContext(ctx,
+		"UPDATE rdq_schema_version SET task_contract_version = $1 WHERE singleton", TaskContractVersion+1); err != nil {
+		t.Fatalf("bumping task-contract version: %v", err)
+	}
+	if err := CheckTaskContract(ctx, db); !errors.Is(err, ErrSchemaVersionMismatch) {
+		t.Fatalf("worker gate against newer task contract: got %v, want ErrSchemaVersionMismatch", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		"UPDATE rdq_schema_version SET task_contract_version = $1 WHERE singleton", TaskContractVersion); err != nil {
+		t.Fatalf("restoring task-contract version: %v", err)
+	}
+
 	// --- gate rejects an unknown (newer) version ---
 	if _, err := db.ExecContext(ctx,
 		"UPDATE rdq_schema_version SET version = $1 WHERE singleton", SchemaVersion+1); err != nil {
@@ -215,6 +253,16 @@ func recordedVersion(ctx context.Context, t *testing.T, db *sql.DB) int {
 	if err := db.QueryRowContext(ctx,
 		"SELECT version FROM rdq_schema_version WHERE singleton").Scan(&v); err != nil {
 		t.Fatalf("reading recorded version: %v", err)
+	}
+	return v
+}
+
+func recordedTaskContract(ctx context.Context, t *testing.T, db *sql.DB) int {
+	t.Helper()
+	var v int
+	if err := db.QueryRowContext(ctx,
+		"SELECT task_contract_version FROM rdq_schema_version WHERE singleton").Scan(&v); err != nil {
+		t.Fatalf("reading recorded task-contract version: %v", err)
 	}
 	return v
 }

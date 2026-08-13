@@ -34,20 +34,20 @@ class SchemaGateUnitTest {
 
     @Test
     void acceptsMatchingVersion() {
-        assertThatCode(() -> SchemaGate.check(SchemaGate.SCHEMA_VERSION)).doesNotThrowAnyException();
+        assertThatCode(() -> SchemaGate.check(SchemaGate.TASK_CONTRACT_VERSION)).doesNotThrowAnyException();
     }
 
     @Test
     void rejectsNewerVersionWithUpgradeGuidance() {
         assertThatExceptionOfType(SchemaVersionMismatchException.class)
-            .isThrownBy(() -> SchemaGate.check(SchemaGate.SCHEMA_VERSION + 1))
+            .isThrownBy(() -> SchemaGate.check(SchemaGate.TASK_CONTRACT_VERSION + 1))
             .withMessageContaining("newer than this engine");
     }
 
     @Test
     void rejectsOlderVersionWithMigrateGuidance() {
         assertThatExceptionOfType(SchemaVersionMismatchException.class)
-            .isThrownBy(() -> SchemaGate.check(SchemaGate.SCHEMA_VERSION - 1))
+            .isThrownBy(() -> SchemaGate.check(SchemaGate.TASK_CONTRACT_VERSION - 1))
             .withMessageContaining("older than this engine");
     }
 
@@ -56,6 +56,6 @@ class SchemaGateUnitTest {
         SchemaVersionMismatchException ex = assertThrows(
             SchemaVersionMismatchException.class, () -> SchemaGate.check(999));
         assertThat(ex.databaseVersion()).isEqualTo(999);
-        assertThat(ex.engineVersion()).isEqualTo(SchemaGate.SCHEMA_VERSION);
+        assertThat(ex.engineVersion()).isEqualTo(SchemaGate.TASK_CONTRACT_VERSION);
     }
 }

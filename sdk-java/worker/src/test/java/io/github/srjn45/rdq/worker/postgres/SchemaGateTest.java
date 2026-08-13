@@ -62,17 +62,33 @@ class SchemaGateTest {
     }
 
     @Test
-    void open_refusesMismatchedVersion() throws SQLException {
+    void open_refusesMismatchedTaskContract() throws SQLException {
         try (PostgreSQLContainer<?> pg = TestPostgres.container()) {
             pg.start();
             DataSource ds = TestPostgres.dataSource(pg);
             TestPostgres.applyMigrations(ds);
-            // Tamper the recorded version to a value this build does not understand.
+            // Tamper the task contract to a value this worker does not understand.
             try (Connection conn = ds.getConnection(); Statement st = conn.createStatement()) {
-                st.executeUpdate("UPDATE rdq_schema_version SET version = 999 WHERE singleton");
+                st.executeUpdate("UPDATE rdq_schema_version SET task_contract_version = 999 WHERE singleton");
             }
             assertThatExceptionOfType(SchemaVersionMismatchException.class)
                 .isThrownBy(() -> PostgresStorage.open(ds));
+        }
+    }
+
+    @Test
+    void open_toleratesServerOnlyVersionBump() throws SQLException {
+        try (PostgreSQLContainer<?> pg = TestPostgres.container()) {
+            pg.start();
+            DataSource ds = TestPostgres.dataSource(pg);
+            TestPostgres.applyMigrations(ds);
+            // Simulate a future server-only migration: the overall version advances
+            // but the task contract is unchanged. The worker must still open —
+            // this is the decoupling the task-contract gate exists to provide (#54).
+            try (Connection conn = ds.getConnection(); Statement st = conn.createStatement()) {
+                st.executeUpdate("UPDATE rdq_schema_version SET version = 999 WHERE singleton");
+            }
+            assertThatCode(() -> PostgresStorage.open(ds)).doesNotThrowAnyException();
         }
     }
 }
