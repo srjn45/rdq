@@ -47,15 +47,27 @@ final class EngineTestHelper {
         return ds;
     }
 
+    /**
+     * The frozen up-migration sequence, applied in order — matching a production
+     * database (all migrations via {@code rdq migrate}) so the exact-match
+     * {@code rdq_schema_version} gate is satisfied.
+     */
+    private static final String[] MIGRATIONS = {
+        "0001_init.up.sql",
+        "0002_config.up.sql",
+        "0003_audit.up.sql",
+    };
+
     @SuppressFBWarnings(
         value = "SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE",
-        justification = "frozen trusted T2.1 migration SQL read from repo")
+        justification = "frozen trusted migration SQL read from repo")
     static void applyMigrations(DataSource ds) {
-        String sql = readMigration();
         try (Connection conn = ds.getConnection(); Statement st = conn.createStatement()) {
-            st.execute(sql);
+            for (String name : MIGRATIONS) {
+                st.execute(readMigration(name));
+            }
         } catch (SQLException ex) {
-            throw new RuntimeException("applying T2.1 migration", ex);
+            throw new RuntimeException("applying migrations", ex);
         }
     }
 
@@ -67,8 +79,8 @@ final class EngineTestHelper {
         }
     }
 
-    private static String readMigration() {
-        Path file = findRepoFile("storage/postgres/migrations/0001_init.up.sql");
+    private static String readMigration(String name) {
+        Path file = findRepoFile("storage/postgres/migrations/" + name);
         try {
             return Files.readString(file, StandardCharsets.UTF_8);
         } catch (IOException ex) {

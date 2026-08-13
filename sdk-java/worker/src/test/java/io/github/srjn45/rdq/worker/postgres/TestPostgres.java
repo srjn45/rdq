@@ -63,18 +63,31 @@ final class TestPostgres {
         return ds;
     }
 
-    /** Applies the frozen T2.1 up-migration to {@code dataSource} (idempotent DDL, run once). */
+    /**
+     * The frozen up-migration sequence, applied in order. Production databases
+     * are brought to the latest version by {@code rdq migrate} (all migrations),
+     * and the {@code rdq_schema_version} gate requires an exact match — so the
+     * test DB must reach the same version, not just the task-table baseline.
+     */
+    private static final String[] MIGRATIONS = {
+        "0001_init.up.sql",
+        "0002_config.up.sql",
+        "0003_audit.up.sql",
+    };
+
+    /** Applies the full frozen migration sequence to {@code dataSource} (idempotent DDL, run once). */
     @SuppressFBWarnings(
         value = "SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE",
-        justification = "the migration script is the trusted, frozen T2.1 SQL read from the repo")
+        justification = "the migration scripts are the trusted, frozen SQL read from the repo")
     static void applyMigrations(DataSource dataSource) {
-        String sql = readMigration();
         try (Connection conn = dataSource.getConnection(); Statement st = conn.createStatement()) {
-            // The migration is a multi-statement script; a plain Statement runs the
-            // whole ;-separated batch in one call.
-            st.execute(sql);
+            for (String name : MIGRATIONS) {
+                // Each migration is a multi-statement script; a plain Statement runs
+                // the whole ;-separated batch in one call.
+                st.execute(readMigration(name));
+            }
         } catch (SQLException ex) {
-            throw new RuntimeException("applying T2.1 migration", ex);
+            throw new RuntimeException("applying migrations", ex);
         }
     }
 
@@ -87,9 +100,9 @@ final class TestPostgres {
         }
     }
 
-    /** The frozen T2.1 up-migration SQL, located by walking up from the test cwd. */
-    static String readMigration() {
-        Path file = repoFile("storage/postgres/migrations/0001_init.up.sql");
+    /** A frozen up-migration by filename, located by walking up from the test cwd. */
+    static String readMigration(String name) {
+        Path file = repoFile("storage/postgres/migrations/" + name);
         try {
             return Files.readString(file, StandardCharsets.UTF_8);
         } catch (IOException ex) {
