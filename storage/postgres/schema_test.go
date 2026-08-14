@@ -83,3 +83,27 @@ func TestCheckSchemaVersion(t *testing.T) {
 		}
 	}
 }
+
+// TestCheckTaskContract exercises the worker-facing gate's pure comparison
+// (issue #54): the recorded task-contract version must exactly match
+// TaskContractVersion, independent of the overall schema version.
+func TestCheckTaskContract(t *testing.T) {
+	if err := checkTaskContract(TaskContractVersion); err != nil {
+		t.Errorf("matching task-contract version should pass, got %v", err)
+	}
+	for _, v := range []int{TaskContractVersion + 1, TaskContractVersion + 99} {
+		if err := checkTaskContract(v); !errors.Is(err, ErrSchemaVersionMismatch) {
+			t.Errorf("newer task-contract version %d should mismatch, got %v", v, err)
+		}
+	}
+	if TaskContractVersion > 1 {
+		if err := checkTaskContract(TaskContractVersion - 1); !errors.Is(err, ErrSchemaVersionMismatch) {
+			t.Errorf("older task-contract version should mismatch, got %v", err)
+		}
+	}
+	// The task contract must never exceed the overall schema version: the
+	// migration that establishes a contract also advances SchemaVersion.
+	if TaskContractVersion > SchemaVersion {
+		t.Errorf("TaskContractVersion %d must not exceed SchemaVersion %d", TaskContractVersion, SchemaVersion)
+	}
+}

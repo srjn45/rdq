@@ -56,6 +56,7 @@ final class EngineTestHelper {
         "0001_init.up.sql",
         "0002_config.up.sql",
         "0003_audit.up.sql",
+        "0004_schema_contract.up.sql",
     };
 
     @SuppressFBWarnings(

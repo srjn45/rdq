@@ -17,15 +17,28 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 )
 
-// SchemaVersion is the version of the rdq Postgres schema this build understands
-// (design 05 G5). The value is written into the rdq_schema_version row by the
-// migrations; CheckSchemaVersion refuses to run an engine against a database
-// carrying a different version. Bump it whenever a migration changes the schema
-// contract — the Java Postgres binding (T7.4) tracks the same number.
+// SchemaVersion is the version of the overall rdq Postgres schema this build
+// understands (design 05 G5). It is bumped by EVERY migration — including
+// server-only ones — and written into rdq_schema_version.version. It gates the
+// full schema (the server tracks it; `rdq migrate` advances to it).
 //
 // v1 → v2: added rdq_queue_config (ConfigStore, T5.4, design 04 §3).
 // v2 → v3: added rdq_audit (audit log, T6.3, design 06).
-const SchemaVersion = 3
+// v3 → v4: added rdq_schema_version.task_contract_version (issue #54) — a second
+//
+//	counter that decouples the worker gate from server-only migrations.
+const SchemaVersion = 4
+
+// TaskContractVersion is the version of the TASK-TABLE contract this build's
+// worker binds to (rdq_task / rdq_dlq_task / rdq_attempt). It advances only when
+// a migration changes those tables — NOT for server-only migrations (config,
+// audit), which bump SchemaVersion but leave the task contract intact. Workers
+// gate on it (CheckTaskContract) so a server-feature migration never locks them
+// out, while a genuine task-schema change still stops an out-of-date worker.
+// The Java Postgres binding tracks the same number (SchemaGate.TASK_CONTRACT_VERSION).
+//
+// The task-table contract has been stable since 0001, so this is 1.
+const TaskContractVersion = 1
 
 // migrationLedger is the runner's bookkeeping table: which migration files have
 // been applied. It is distinct from rdq_schema_version (the startup gate) —
@@ -288,5 +301,48 @@ func checkSchemaVersion(dbVersion int) error {
 	default:
 		return fmt.Errorf("%w: database schema version %d is older than this engine's %d; run migrations",
 			ErrSchemaVersionMismatch, dbVersion, SchemaVersion)
+	}
+}
+
+// CheckTaskContract reads rdq_schema_version.task_contract_version and reports
+// whether this build's worker may bind to the task tables (design 05 G5, issue
+// #54). Unlike CheckSchemaVersion — which gates the full schema, including
+// server-only tables — this gate advances only when the task-table contract
+// changes, so a worker is not locked out by server-only migrations (config,
+// audit). It returns ErrSchemaNotInitialized if the schema is unmigrated or the
+// task_contract_version column is absent (a pre-0004 schema that predates this
+// gate), ErrSchemaVersionMismatch if the recorded contract differs from
+// TaskContractVersion, and nil when they match.
+func CheckTaskContract(ctx context.Context, db *sql.DB) error {
+	var version int
+	err := db.QueryRowContext(ctx,
+		"SELECT task_contract_version FROM rdq_schema_version WHERE singleton").Scan(&version)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrSchemaNotInitialized
+		}
+		var pgErr *pgconn.PgError
+		// 42P01 undefined_table: rdq_schema_version absent (no migrations).
+		// 42703 undefined_column: task_contract_version absent (pre-0004 schema).
+		if errors.As(err, &pgErr) && (pgErr.Code == "42P01" || pgErr.Code == "42703") {
+			return ErrSchemaNotInitialized
+		}
+		return fmt.Errorf("rdq/postgres: reading task-contract version: %w", err)
+	}
+	return checkTaskContract(version)
+}
+
+// checkTaskContract is the pure comparison behind CheckTaskContract, split out
+// so the gate logic is unit-testable without a database.
+func checkTaskContract(dbVersion int) error {
+	switch {
+	case dbVersion == TaskContractVersion:
+		return nil
+	case dbVersion > TaskContractVersion:
+		return fmt.Errorf("%w: database task-contract version %d is newer than this worker's %d; upgrade the worker",
+			ErrSchemaVersionMismatch, dbVersion, TaskContractVersion)
+	default:
+		return fmt.Errorf("%w: database task-contract version %d is older than this worker's %d; run migrations",
+			ErrSchemaVersionMismatch, dbVersion, TaskContractVersion)
 	}
 }

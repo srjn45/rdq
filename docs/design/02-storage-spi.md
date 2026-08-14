@@ -159,6 +159,16 @@ binding never defines its own schema. A `rdq_schema_version` row records the sch
 gates startup: an engine refuses to run against an unknown (newer) schema version rather than
 corrupting rows it does not understand.
 
+That row carries **two** counters (issue #54). `version` is the overall schema version, bumped
+by every migration — including server-only ones (`rdq_queue_config`, `rdq_audit`) that never
+touch the task tables; the server and `rdq migrate` track it. `task_contract_version` advances
+only when a migration changes the task tables (`rdq_task` / `rdq_dlq_task` / `rdq_attempt`) that
+a worker binds to. **Workers gate on `task_contract_version`, the server on `version`.** This
+keeps a worker running across server-only migrations (which would otherwise lock every binding
+out until it bumped in lockstep) while still refusing a genuinely-changed task schema. The Go
+`storage/postgres.TaskContractVersion` and Java `SchemaGate.TASK_CONTRACT_VERSION` must stay
+equal; a no-Docker unit test (`SchemaContractLockstepTest`) fails the build if they drift.
+
 ## 5. Sketch mappings — Redis, MongoDB (fast-follow, sanity check that the SPI fits)
 
 - **Redis:** per-queue ZSET scored by `next_attempt_at` (single ZSET; an expired lease is
