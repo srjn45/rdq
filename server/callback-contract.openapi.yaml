@@ -1,0 +1,187 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# NORMATIVE ARTIFACT — this OpenAPI document is the authoritative contract for
+# the endpoint YOU implement to receive rdq callbacks (design 04 §4). rdq-server
+# is the HTTP *client* here; your service is the *server*. Generate a server stub
+# from this file (e.g. `openapi-generator generate -g spring` / `-g go-server`),
+# then fill in the handler body: parse the payload, do the work, return a status
+# code from the contract below.
+#
+# Key design point (design 04 §4): the request BODY is your own payload, delivered
+# byte-for-byte — rdq never wraps it. All rdq metadata rides in X-RDQ-* headers, so
+# there is nothing to unwrap. Because the payload is opaque to rdq, this spec types
+# the body as raw bytes; the concrete media type is the task's
+# payload_content_type. (A future opt-in per-queue payload schema can type the body
+# — see the scope note in the repo's callback docs.)
+#
+# The single operation below uses a representative path (/rdq/callback). Your real
+# callback URL is whatever you register in the queue's callback.url config; remap
+# the generated route to it. The operation, headers, and response semantics are the
+# contract — the path is illustrative.
+openapi: 3.1.0
+
+info:
+  title: rdq callback contract
+  version: "1.0.0"
+  description: >
+    The contract an rdq callback receiver implements. rdq-server POSTs a due
+    task's raw payload to the queue's registered callback URL; the receiver
+    processes it and signals the outcome purely through the HTTP status code.
+    A 2xx is an ack (task done); a timeout or transport failure is a retry; other
+    statuses are classified per the queue's response_mapping (design 03 §2),
+    defaulting to FR-29. This document is generated-from and validated-against the
+    Go dispatcher (server/callback) — the header names and response semantics here
+    are anti-drift-checked against the code.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+
+servers:
+  - url: /
+    description: >
+      Your service. The callback path is operator-configured (queue callback.url);
+      /rdq/callback below is a representative route to generate a stub against.
+
+tags:
+  - name: callback
+    description: The inbound delivery rdq makes to your endpoint (design 04 §4).
+
+paths:
+  /rdq/callback:
+    post:
+      tags: [callback]
+      operationId: receiveRdqCallback
+      summary: Receive one task delivery from rdq
+      description: >
+        Invoked once per delivery attempt. The body is the task's payload exactly
+        as submitted; task identity and attempt metadata are in the X-RDQ-* headers.
+        Return a status code to signal the outcome (see responses). Handlers MUST be
+        idempotent: rdq is at-least-once, so the same X-RDQ-Task-Id may be delivered
+        more than once (e.g. after a lease expiry or a timed-out-but-processed call).
+      parameters:
+        - $ref: "#/components/parameters/RdqTaskId"
+        - $ref: "#/components/parameters/RdqQueue"
+        - $ref: "#/components/parameters/RdqHandlerRef"
+        - $ref: "#/components/parameters/RdqAttempt"
+        - $ref: "#/components/parameters/RdqSignature"
+        - $ref: "#/components/parameters/Traceparent"
+      requestBody:
+        required: true
+        description: >
+          The task payload, delivered byte-for-byte. Content-Type is the task's
+          payload_content_type (default application/octet-stream). rdq does not
+          interpret the body; decode it as your own domain object.
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+          application/json:
+            schema:
+              description: Any JSON payload your producer submitted; opaque to rdq.
+      responses:
+        "2XX":
+          description: >
+            SUCCESS — the attempt is acked and the task is marked SUCCEEDED
+            (retained until task_ttl). Any 2xx counts as an ack; rdq does not read
+            the response body on success (a 200-with-error-payload mapper is post-v1).
+        "408":
+          description: >
+            Request Timeout. Retryable ONLY when the queue's response_mapping lists
+            408 as retryable (the recommended canonical mapping does). Absent that
+            override, the bare default classifies every 4xx — including 408 — as
+            PERMANENT (see the "4XX" response). rdq records the first 4 KiB of your
+            response body as the attempt's error.detail.
+        "429":
+          description: >
+            Too Many Requests. Same rule as 408: retryable only via response_mapping
+            (recommended); PERMANENT under the bare default otherwise. Use this to
+            shed load during a redrive storm — pair it with the queue's per-instance
+            rate_limit.
+        "4XX":
+          description: >
+            PERMANENT_FAILURE — the task is dead-lettered immediately with its full
+            attempt history; remaining attempts are skipped. This is the default for
+            every client error (409, 422, …), and for 408/429 unless response_mapping
+            reclassifies them. The response body's first 4 KiB is stored as
+            error.detail, so a `422 {"reason":"..."}` produces a self-explaining DLQ
+            entry.
+        "5XX":
+          description: >
+            RETRYABLE_FAILURE — the attempt failed transiently; rdq reschedules per
+            the queue's backoff policy until max_attempts is exhausted, then
+            dead-letters. Return 5xx for downstream/dependency failures you expect to
+            recover. The response body's first 4 KiB is captured as error.detail.
+      security:
+        - bearer: []
+        - {}
+
+components:
+  # These header parameters are anti-drift-checked against the Go constants in
+  # server/callback (HeaderTaskID, HeaderQueue, HeaderHandlerRef, HeaderAttempt,
+  # SignatureHeader). Adding or renaming an X-RDQ-* header in one place without the
+  # other fails TestCallbackSpecHeadersMatchGoConstants.
+  parameters:
+    RdqTaskId:
+      name: X-RDQ-Task-Id
+      in: header
+      required: true
+      description: The task's ULID. Stable across retries of the same task — the idempotency key.
+      schema:
+        type: string
+    RdqQueue:
+      name: X-RDQ-Queue
+      in: header
+      required: true
+      description: The logical queue the task belongs to.
+      schema:
+        type: string
+    RdqHandlerRef:
+      name: X-RDQ-Handler-Ref
+      in: header
+      required: true
+      description: The stable handler name the task was submitted under.
+      schema:
+        type: string
+    RdqAttempt:
+      name: X-RDQ-Attempt
+      in: header
+      required: true
+      description: The 1-based attempt number for this delivery.
+      schema:
+        type: integer
+        minimum: 1
+    RdqSignature:
+      name: X-RDQ-Signature
+      in: header
+      required: false
+      description: >
+        Present only when the queue's callback auth.type is hmac. Value is
+        `t=<unix>,v1=<hex(hmac-sha256(secret, "<t>.<body>"))>`. Verify it before
+        trusting the request: recompute the tag over "<t>.<rawBody>" and constant-time
+        compare, then reject stale timestamps to bound replay (design 04 §4).
+      schema:
+        type: string
+        pattern: '^t=[0-9]+,v1=[0-9a-f]+$'
+    Traceparent:
+      name: traceparent
+      in: header
+      required: false
+      description: >
+        W3C trace context, propagated from the task's headers when present, so the
+        callback attempt joins the originating trace. Any other producer-set task
+        headers are forwarded verbatim too, but can never shadow an X-RDQ-* header,
+        the signature, or the auth credential (rdq sets those last).
+      schema:
+        type: string
+
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: >
+        Sent when the queue's callback auth.type is bearer
+        (`Authorization: Bearer <secret>`). auth.type header instead sends the raw
+        secret in an operator-named header; auth.type hmac sends no Authorization
+        header and authenticates via X-RDQ-Signature. All are configured per queue
+        (design 03 §2); the receiver validates whichever it registered.
